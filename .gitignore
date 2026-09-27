@@ -1,3 +1,7 @@
+# ChestAI M1 data -- never commit scans, caches, or anything downloaded from
+# CT-RATE / the local NHRD dataset. See docs/data_contract.md.
+/data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
