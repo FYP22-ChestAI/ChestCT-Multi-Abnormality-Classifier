@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from chestct.data.loader import check_hu_plausible, ensure_calibrated_hu, load_nifti_volume
+from chestct.preprocessing.loader import check_hu_plausible, ensure_calibrated_hu, load_nifti_volume
 
 
 def test_load_nifti_volume_roundtrips_shape_and_spacing(synthetic_nifti):

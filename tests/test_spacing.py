@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from chestct.data.spacing import resample_to_spacing
-from chestct.data.types import Volume
+from chestct.preprocessing.spacing import resample_to_spacing
+from chestct.preprocessing.types import Volume
 
 
 def test_resample_upsamples_bigger_bodies_more_than_smaller_ones():

@@ -37,9 +37,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from chestct.data.config import SourceConfig, load_config
-from chestct.data.dicom_loader import discover_scans
-from chestct.data.manifest import (
+from chestct.preprocessing.config import SourceConfig, load_config
+from chestct.preprocessing.dicom_loader import discover_scans
+from chestct.preprocessing.manifest import (
     FOLDER_BUILDER,
     assign_splits_by_amount,
     build_manifest,

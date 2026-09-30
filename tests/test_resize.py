@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from chestct.data.resize import resize_slices
+from chestct.preprocessing.resize import resize_slices
 
 
 @pytest.mark.parametrize("in_shape", [(5, 70, 55), (5, 300, 180), (5, 224, 224)])

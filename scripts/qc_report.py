@@ -14,9 +14,9 @@ import json
 import numpy as np
 import pandas as pd
 
-from chestct.data.config import load_config
-from chestct.data.pipeline import apply_loader_checks
-from chestct.data.quality import check_volume, save_montage
+from chestct.preprocessing.config import load_config
+from chestct.preprocessing.pipeline import apply_loader_checks
+from chestct.preprocessing.quality import check_volume, save_montage
 
 
 def main() -> None:

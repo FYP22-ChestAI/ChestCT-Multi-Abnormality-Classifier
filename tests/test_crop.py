@@ -3,8 +3,8 @@ must keep the whole body even though the lungs read as background-like air.
 """
 import numpy as np
 
-from chestct.data.crop import crop_to_foreground, foreground_bbox
-from chestct.data.types import Volume
+from chestct.preprocessing.crop import crop_to_foreground, foreground_bbox
+from chestct.preprocessing.types import Volume
 
 
 def test_bbox_covers_full_body_despite_internal_air(synthetic_hu):

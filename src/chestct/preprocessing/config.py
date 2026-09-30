@@ -39,7 +39,7 @@ class SourceConfig:
 
     format: str = "nifti"  # "nifti", "dicom", or "auto" (detect from the files found)
     raw_dir: str = "data/raw"  # default location; overridable at run time with --source-root / --raw-dir
-    manifest_builder: str = "ctrate"  # a key in chestct.data.manifest.MANIFEST_BUILDERS
+    manifest_builder: str = "ctrate"  # a key in chestct.preprocessing.manifest.MANIFEST_BUILDERS
     # How scans are grouped into patients for patient-level splitting. "path"
     # uses the first `patient_path_depth` folder levels (NHRD: depth 1, since
     # every top folder is one patient and 'P00001' repeats across them);

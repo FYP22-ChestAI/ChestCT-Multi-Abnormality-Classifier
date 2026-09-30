@@ -2,9 +2,9 @@
 batch path and the future single-scan inference entry point call."""
 import numpy as np
 
-from chestct.data.pipeline import process_scan
-from chestct.data.preprocess_config import PreprocessConfig
-from chestct.data.quality import QCThresholds
+from chestct.preprocessing.pipeline import process_scan
+from chestct.preprocessing.preprocess_config import PreprocessConfig
+from chestct.preprocessing.quality import QCThresholds
 
 
 def test_process_scan_end_to_end(synthetic_nifti):

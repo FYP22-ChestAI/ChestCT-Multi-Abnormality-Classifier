@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from chestct.data.dicom_loader import (
+from chestct.preprocessing.dicom_loader import (
     DicomReadError,
     MixedSeriesError,
     discover_scans,

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from chestct.data.dataset import slices_to_tensor
+from chestct.preprocessing.dataset import slices_to_tensor
 
 
 def test_slices_to_tensor_shape_and_range():
@@ -22,7 +22,7 @@ def test_slices_to_tensor_imagenet_normalisation_shifts_mean():
 def test_chestct_dataset_getitem_requires_torch_or_is_skipped(tmp_path):
     torch = pytest.importorskip("torch")
 
-    from chestct.data.dataset import ChestCTDataset
+    from chestct.preprocessing.dataset import ChestCTDataset
 
     npy_path = tmp_path / "train_1_a_1.npy"
     np.save(npy_path, np.zeros((10, 224, 224), dtype=np.int16))
@@ -47,7 +47,7 @@ def test_chestct_dataset_with_no_labels_for_inference_use(tmp_path):
     lets a future inference entry point reuse it: a real scan has no label,
     producing one is the model's job (see docs/data_contract.md)."""
     pytest.importorskip("torch")
-    from chestct.data.dataset import ChestCTDataset
+    from chestct.preprocessing.dataset import ChestCTDataset
 
     npy_path = tmp_path / "case_1.npy"
     np.save(npy_path, np.zeros((10, 224, 224), dtype=np.int16))

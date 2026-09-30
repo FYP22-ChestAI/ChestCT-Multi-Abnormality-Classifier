@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from chestct.data.staging import stage_tree
+from chestct.preprocessing.staging import stage_tree
 
 
 def main() -> None:

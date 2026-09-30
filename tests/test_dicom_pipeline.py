@@ -9,13 +9,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from chestct.data.config import DataConfig, PathsConfig, SourceConfig
-from chestct.data.dicom_loader import discover_scans
-from chestct.data.manifest import build_manifest, build_manifest_folder
-from chestct.data.pipeline import process_scan
-from chestct.data.preprocess import PreprocessConfig, is_cache_fresh, preprocess_one
-from chestct.data.quality import QCThresholds
-from chestct.data.staging import stage_tree
+from chestct.preprocessing.config import DataConfig, PathsConfig, SourceConfig
+from chestct.preprocessing.dicom_loader import discover_scans
+from chestct.preprocessing.manifest import build_manifest, build_manifest_folder
+from chestct.preprocessing.pipeline import process_scan
+from chestct.preprocessing.preprocess import PreprocessConfig, is_cache_fresh, preprocess_one
+from chestct.preprocessing.quality import QCThresholds
+from chestct.preprocessing.staging import stage_tree
 from chestct.inference import run_inference
 
 REPO = Path(__file__).resolve().parents[1]

@@ -1,6 +1,6 @@
 import numpy as np
 
-from chestct.data.windows import DEFAULT_WINDOWS, apply_window, apply_windows
+from chestct.preprocessing.windows import DEFAULT_WINDOWS, apply_window, apply_windows
 
 
 def test_apply_window_clips_and_scales_to_unit_range():

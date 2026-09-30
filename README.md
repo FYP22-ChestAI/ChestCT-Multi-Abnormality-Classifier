@@ -29,7 +29,7 @@ several) is not built (the data is lung series only).
 ```
 configs/data.yaml          all pipeline settings (spacing, size, windows, QC thresholds, sources, device)
 docs/data_contract.md      what M1 hands to M3/M4, and why -- read this first
-src/chestct/data/
+src/chestct/preprocessing/
   types.py                 the one shared Volume type every stage uses
   loader.py                NIfTI -> Volume, real HU, explicit calibration check (Step 4)
   dicom_loader.py          DICOM series -> Volume; finds scans under any root folder
@@ -64,7 +64,7 @@ tests/                       pytest, all using synthetic data -- no CT-RATE down
 python -m pip install -e ".[dev]"
 ```
 
-Torch is only needed for `chestct.data.dataset.ChestCTDataset.__getitem__`
+Torch is only needed for `chestct.preprocessing.dataset.ChestCTDataset.__getitem__`
 (the final hand-off to M3/M4's training code); everything else in this repo
 runs without it. Install it yourself when you need it:
 
@@ -133,7 +133,7 @@ pip install torch
   dtype, and value range you'll get, and the two `ChestCTDataset` modes
   (`all_lowres` for M3's scoring pass, `selected` for M4's full-resolution
   encoding).
-- Nothing here is windowed until you ask for it (`chestct.data.dataset.slices_to_tensor`)
+- Nothing here is windowed until you ask for it (`chestct.preprocessing.dataset.slices_to_tensor`)
   -- the cache stores raw HU so windows can still change without re-running
   preprocessing.
 - `configs/data.yaml` is the single source of truth for every tunable

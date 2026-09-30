@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from chestct.data.manifest import (
+from chestct.preprocessing.manifest import (
     assign_patient_splits,
     assign_splits_by_amount,
     build_manifest,

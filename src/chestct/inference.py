@@ -1,6 +1,6 @@
 """The clinical/inference front door -- the second thing that calls
-chestct.data.pipeline.process_scan(), alongside the training batch path
-(chestct.data.preprocess.preprocess_one). Both call the exact same core, so a
+chestct.preprocessing.pipeline.process_scan(), alongside the training batch path
+(chestct.preprocessing.preprocess.preprocess_one). Both call the exact same core, so a
 scan is never processed differently at inference than it was at training
 time (see docs/data_contract.md, "training-serving skew").
 
@@ -8,7 +8,7 @@ What's genuinely different here, and only here:
   - ``path`` can point at one scan (a NIfTI file, or a single DICOM series
     folder) or at a folder holding many scans (many patients/series) --
     discovered the same tag-based way training data is, via
-    chestct.data.dicom_loader.discover_scans. One request can mean one scan
+    chestct.preprocessing.dicom_loader.discover_scans. One request can mean one scan
     or a small batch; both go through the same code path here.
   - No labels, and no split column -- a real request has none; producing a
     label is the model's job (M4), and there is no train/val/test to assign
@@ -34,12 +34,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .data.dataset import slices_to_tensor
-from .data.dicom_loader import discover_scans, make_scan_id
-from .data.loaders import detect_format
-from .data.pipeline import process_scan
-from .data.preprocess_config import PreprocessConfig
-from .data.quality import QCResult, QCThresholds
+from .preprocessing.dataset import slices_to_tensor
+from .preprocessing.dicom_loader import discover_scans, make_scan_id
+from .preprocessing.loaders import detect_format
+from .preprocessing.pipeline import process_scan
+from .preprocessing.preprocess_config import PreprocessConfig
+from .preprocessing.quality import QCResult, QCThresholds
 
 
 @dataclass

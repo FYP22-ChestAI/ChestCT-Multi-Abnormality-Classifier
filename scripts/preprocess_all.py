@@ -2,7 +2,7 @@
 
 Resumable: re-running skips a volume only if its cached .npy was produced by
 the EXACT SAME config as the one active now (checked via a fingerprint
-sidecar, see chestct.data.preprocess.is_cache_fresh) -- switching CT-RATE
+sidecar, see chestct.preprocessing.preprocess.is_cache_fresh) -- switching CT-RATE
 download folders, or changing any preprocessing setting, correctly triggers
 a reprocess instead of silently reusing stale, differently-processed output.
 
@@ -34,8 +34,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from chestct.data.config import load_config
-from chestct.data.preprocess import PreprocessConfig, config_fingerprint, is_cache_fresh, preprocess_one
+from chestct.preprocessing.config import load_config
+from chestct.preprocessing.preprocess import PreprocessConfig, config_fingerprint, is_cache_fresh, preprocess_one
 
 try:
     from tqdm import tqdm

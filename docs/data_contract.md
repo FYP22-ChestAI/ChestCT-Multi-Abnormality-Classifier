@@ -13,10 +13,10 @@ only.
 ## Architecture: one shared core, three front doors
 
 There is exactly one place the actual image transformation happens:
-`chestct.data.pipeline.process_scan()` (load -> calibrate -> resample ->
+`chestct.preprocessing.pipeline.process_scan()` (load -> calibrate -> resample ->
 crop -> resize -> QC). Everything else is a thin "front door" calling it:
 
-1. **Training batch** (`scripts/preprocess_all.py` -> `chestct.data.preprocess.preprocess_one`):
+1. **Training batch** (`scripts/preprocess_all.py` -> `chestct.preprocessing.preprocess.preprocess_one`):
    many scans, parallel, always saves to disk regardless of QC outcome
    (QC exclusion happens later, reviewed by a human via `qc_report.py`).
 2. **Local batch import** (built): NHRD hospital data, already on disk (a
@@ -68,7 +68,7 @@ benchmark set), replacing the old two-separate-runs flow. Selection is by
 alphabetically" -- a pilot subset should not be systematically biased
 toward one corner of the patient id range. `scripts/build_manifest.py`
 takes the same `--n-train`/`--n-val`/`--n-test`/`--seed` for local (folder)
-sources too, via `chestct.data.manifest.assign_splits_by_amount`, which
+sources too, via `chestct.preprocessing.manifest.assign_splits_by_amount`, which
 picks exactly that many PATIENTS (never scans) at random; for CT-RATE, only
 `--n-train`/`--n-val` are given here (the official VALID-pool patients
 become `test` directly, with no further splitting). Stratified (label-aware)
@@ -101,7 +101,7 @@ the current (metal-tolerant) thresholds.
 legitimately use different `RescaleIntercept` values (confirmed: -1024 *and*
 -8192 both occur on real, correctly-calibrated data, depending on the
 scanner). The loader used to just trust whatever `nibabel` auto-applied
-from each file's own header, with no check. `chestct.data.loader.ensure_calibrated_hu`
+from each file's own header, with no check. `chestct.preprocessing.loader.ensure_calibrated_hu`
 now explicitly checks whether a scan looks calibrated (a low-percentile
 value already comfortably below -500) and, if not, applies that scan's own
 `RescaleSlope`/`RescaleIntercept` (from the metadata CSV, threaded through
@@ -112,7 +112,7 @@ legitimate scanner variation as broken).
 
 **Stale cache reuse across a settings change is now impossible.** Every
 cached `.npy` gets a sidecar recording a fingerprint of the exact
-`PreprocessConfig` that produced it (`chestct.data.preprocess.config_fingerprint`).
+`PreprocessConfig` that produced it (`chestct.preprocessing.preprocess.config_fingerprint`).
 `scripts/preprocess_all.py` only skips a volume if that fingerprint matches
 the *current* config -- switching CT-RATE download folders, or changing any
 preprocessing setting, correctly triggers a reprocess instead of silently
@@ -146,7 +146,7 @@ Three things, produced once per scan by `scripts/preprocess_all.py`:
    volumes failed and why. Reproducibility record; also a fingerprint M4 can
    use to know when a cached-feature cache is stale.
 
-Nobody downstream opens the `.npy` directly. `chestct.data.dataset.ChestCTDataset`
+Nobody downstream opens the `.npy` directly. `chestct.preprocessing.dataset.ChestCTDataset`
 reads the `.npy` + manifest row together and hands out a ready tensor:
 
 ```
@@ -162,7 +162,7 @@ reads the `.npy` + manifest row together and hands out a ready tensor:
   the K chosen slice indices at full 224x224 resolution. M3 hasn't been built
   yet, so for now this mode expects the chosen indices as a JSON list in a
   `selected_indices` manifest column; until M3 writes that column, call
-  `chestct.data.dataset.slices_to_tensor()` directly with your own indices.
+  `chestct.preprocessing.dataset.slices_to_tensor()` directly with your own indices.
 
 ## Decisions (Step 0)
 
@@ -177,7 +177,7 @@ reads the `.npy` + manifest row together and hands out a ready tensor:
 | `.npy` format | int16, uncompressed, unwindowed HU | Fast partial reads for M4; half the size of float32; windows stay changeable. |
 | Label mask | Not M1's concern | M1 never reads or stores labels for either data source (see "Architecture" above); a future label source (e.g. M2's report pipeline, or CT-RATE's own labels CSV) is joined by M4, by `volume_id`, on its own side. `ChestCTDataset(mask_cols=...)` exists for whoever does that join to expose an uncertain/not-mentioned state, if their label source has one. |
 | ImageNet normalisation | Applied in the Dataset (`normalize_imagenet=True` by default) | DINOv2 (like most ImageNet-pretrained ViTs) expects this. |
-| Splitting | By **patient**, a fixed amount (not a ratio), random and seeded | So reconstructions/scans of the same person never land in two splits, and a subset is reproducible from its `--seed`. CT-RATE's own `valid`-pool patients are always the held-out **test** set; `train`-pool patients are split into train/val by `--n-train`/`--n-val`. Local data draws all three amounts from one discovered pool. See `assign_splits_by_amount` in `chestct.data.manifest`. |
+| Splitting | By **patient**, a fixed amount (not a ratio), random and seeded | So reconstructions/scans of the same person never land in two splits, and a subset is reproducible from its `--seed`. CT-RATE's own `valid`-pool patients are always the held-out **test** set; `train`-pool patients are split into train/val by `--n-train`/`--n-val`. Local data draws all three amounts from one discovered pool. See `assign_splits_by_amount` in `chestct.preprocessing.manifest`. |
 
 ## Q&A worth keeping (came up while designing this)
 
@@ -229,7 +229,7 @@ and resize steps are required for every scan, not just the unusual ones.
 
 ## Local DICOM data
 
-**Any folder, any layout.** `chestct.data.dicom_loader.discover_scans(root)`
+**Any folder, any layout.** `chestct.preprocessing.dicom_loader.discover_scans(root)`
 walks whatever root it is given and groups the DICOM files found in each
 folder by their `SeriesInstanceUID` tag -- matching how SimpleITK's
 `GetGDCMSeriesIDs` and `dcm2niix` identify a scan, not by folder location. A
@@ -254,7 +254,7 @@ one volume as NIfTI and as DICOM and checks the full pipeline output is
 identical.
 
 **What is checked** (a folder that fails is still reported, never guessed at):
-`chestct.data.pipeline.process_scan()` on a folder given *without* a
+`chestct.preprocessing.pipeline.process_scan()` on a folder given *without* a
 `series_uid` still hard-errors if it holds more than one series (a caller
 that hasn't disambiguated shouldn't get a silently-wrong scan); missing
 tags, mixed image sizes, duplicate positions -> error with the reason;

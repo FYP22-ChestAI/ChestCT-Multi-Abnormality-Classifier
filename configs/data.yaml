@@ -1,7 +1,7 @@
 # M1 data contract settings -- see docs/data_contract.md for why these values
 # were chosen. Changing anything under `preprocess` or `windows` changes the
 # .npy cache; a stale cache is detected automatically (see
-# chestct.data.preprocess.is_cache_fresh) and reprocessed rather than reused.
+# chestct.preprocessing.preprocess.is_cache_fresh) and reprocessed rather than reused.
 
 paths:
   raw_dir: data/raw
@@ -15,7 +15,7 @@ paths:
 # filesystem path works identically for a Hugging-Face download that landed
 # locally, a folder on this laptop, or a mounted university server; nothing
 # here needs to know which. `manifest_builder` selects the id-parsing
-# strategy in chestct.data.manifest.MANIFEST_BUILDERS (never labels -- this
+# strategy in chestct.preprocessing.manifest.MANIFEST_BUILDERS (never labels -- this
 # pipeline doesn't read them, for either source). See
 # scripts/build_manifest.py --source-name and docs/data_contract.md.
 sources:

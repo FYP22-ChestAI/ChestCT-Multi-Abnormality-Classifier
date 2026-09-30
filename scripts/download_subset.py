@@ -39,8 +39,8 @@ import re
 import shutil
 from pathlib import Path
 
-from chestct.data.config import load_config
-from chestct.data.manifest import _strip_nifti_ext
+from chestct.preprocessing.config import load_config
+from chestct.preprocessing.manifest import _strip_nifti_ext
 
 REPO_ID = "ibrahimhamamci/CT-RATE"
 SMALL_FILES = {

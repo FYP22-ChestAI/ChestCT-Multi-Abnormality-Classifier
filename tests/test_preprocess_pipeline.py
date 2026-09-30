@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 
-from chestct.data.preprocess import PreprocessConfig, config_fingerprint, is_cache_fresh, preprocess_one
+from chestct.preprocessing.preprocess import PreprocessConfig, config_fingerprint, is_cache_fresh, preprocess_one
 
 
 def test_preprocess_one_produces_the_expected_npy(tmp_path, synthetic_nifti):

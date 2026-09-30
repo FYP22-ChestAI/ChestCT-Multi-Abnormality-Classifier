@@ -4,8 +4,8 @@ recorded on its own row rather than raised, and that discovery failure
 (nothing found at all) is the one thing that still raises."""
 import pytest
 
-from chestct.data.preprocess_config import PreprocessConfig
-from chestct.data.quality import QCThresholds
+from chestct.preprocessing.preprocess_config import PreprocessConfig
+from chestct.preprocessing.quality import QCThresholds
 from chestct.inference import run_inference
 
 

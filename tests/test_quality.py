@@ -1,6 +1,6 @@
 import numpy as np
 
-from chestct.data.quality import QCThresholds, check_volume, save_montage
+from chestct.preprocessing.quality import QCThresholds, check_volume, save_montage
 
 
 def _good_array(n=200):

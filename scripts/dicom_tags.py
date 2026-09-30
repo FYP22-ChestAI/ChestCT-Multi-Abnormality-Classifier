@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from chestct.data.dicom_loader import DicomReadError, discover_scans, list_dicom_files, summarize_dicom_folder
+from chestct.preprocessing.dicom_loader import DicomReadError, discover_scans, list_dicom_files, summarize_dicom_folder
 
 
 def main() -> None:
