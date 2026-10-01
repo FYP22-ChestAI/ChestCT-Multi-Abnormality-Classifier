@@ -5,6 +5,12 @@ login and accepted CT-RATE terms (see README). Run it yourself:
 
     pip install huggingface_hub
     huggingface-cli login
+    python scripts/download_subset.py
+
+With no arguments at all, this uses configs/data.yaml's sources.ctrate
+n_train/n_val/n_test/seed (a small pilot subset by default). Override any
+of them to change the amount or reproduce a different pick:
+
     python scripts/download_subset.py --n-train 40 --n-val 10 --n-test 10 --seed 0
 
 One command for the whole subset: it fetches n_train+n_val scans from
@@ -167,10 +173,10 @@ def _select_and_download(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n-train", type=int, required=True, help="scans to pull from CT-RATE's official TRAIN pool for training")
-    ap.add_argument("--n-val", type=int, required=True, help="scans to pull from CT-RATE's official TRAIN pool, held out for validation")
-    ap.add_argument("--n-test", type=int, required=True, help="scans to pull from CT-RATE's official VALID pool (the benchmark set)")
-    ap.add_argument("--seed", type=int, default=0, help="random selection seed -- same seed+counts always picks the same volumes")
+    ap.add_argument("--n-train", type=int, default=None, help="scans to pull from CT-RATE's official TRAIN pool for training (default: configs/data.yaml's sources.ctrate.n_train)")
+    ap.add_argument("--n-val", type=int, default=None, help="scans to pull from CT-RATE's official TRAIN pool, held out for validation (default: sources.ctrate.n_val)")
+    ap.add_argument("--n-test", type=int, default=None, help="scans to pull from CT-RATE's official VALID pool, the benchmark set (default: sources.ctrate.n_test)")
+    ap.add_argument("--seed", type=int, default=None, help="random selection seed -- same seed+counts always picks the same volumes (default: sources.ctrate.seed)")
     ap.add_argument("--out-dir", default="data/raw", help="flat destination for the .nii.gz scans")
     ap.add_argument(
         "--meta-dir", default=None, help="flat destination for metadata/no_chest files (default: data/metadata)"
@@ -181,9 +187,9 @@ def main() -> None:
         "--max-combined-gb",
         type=float,
         default=None,
-        help="skip volumes whose estimated resample memory footprint exceeds this (needs the metadata CSV; see docs/data_contract.md)",
+        help="skip volumes whose estimated resample memory footprint exceeds this (default: sources.ctrate.max_combined_gb, if set)",
     )
-    ap.add_argument("--config", default="configs/data.yaml", help="used only to read the target spacing for --max-combined-gb screening")
+    ap.add_argument("--config", default="configs/data.yaml", help="used for the per-source defaults above and the target spacing for --max-combined-gb screening")
     args = ap.parse_args()
 
     try:
@@ -191,18 +197,33 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover - environment-dependent
         raise SystemExit("pip install huggingface_hub first, then run: huggingface-cli login") from exc
 
+    cfg = load_config(args.config)
+    source_cfg = cfg.sources.get("ctrate")
+
+    n_train = args.n_train if args.n_train is not None else (source_cfg.n_train if source_cfg else None)
+    n_val = args.n_val if args.n_val is not None else (source_cfg.n_val if source_cfg else None)
+    n_test = args.n_test if args.n_test is not None else (source_cfg.n_test if source_cfg else None)
+    seed = args.seed if args.seed is not None else (source_cfg.seed if source_cfg else 0)
+    max_combined_gb = args.max_combined_gb if args.max_combined_gb is not None else (source_cfg.max_combined_gb if source_cfg else None)
+    if n_train is None or n_val is None or n_test is None:
+        raise SystemExit(
+            "no --n-train/--n-val/--n-test given, and no default is set in configs/data.yaml's "
+            "sources.ctrate.n_train/n_val/n_test -- pass them explicitly, or add defaults to the config"
+        )
+    print(f"using: n_train={n_train}, n_val={n_val}, n_test={n_test}, seed={seed}, max_combined_gb={max_combined_gb} "
+          f"(override any of these with --n-train etc.)")
+
     out_dir = Path(args.out_dir)
     meta_dir = Path(args.meta_dir) if args.meta_dir else out_dir.parent / "metadata"
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_config(args.config)
 
     _select_and_download(
-        hf_hub_download, "train", args.n_train + args.n_val, args.seed, out_dir, meta_dir,
-        fixed=not args.no_fixed, no_chest_filter=args.no_chest_filter, max_combined_gb=args.max_combined_gb, cfg=cfg,
+        hf_hub_download, "train", n_train + n_val, seed, out_dir, meta_dir,
+        fixed=not args.no_fixed, no_chest_filter=args.no_chest_filter, max_combined_gb=max_combined_gb, cfg=cfg,
     )
     _select_and_download(
-        hf_hub_download, "valid", args.n_test, args.seed, out_dir, meta_dir,
-        fixed=not args.no_fixed, no_chest_filter=args.no_chest_filter, max_combined_gb=args.max_combined_gb, cfg=cfg,
+        hf_hub_download, "valid", n_test, seed, out_dir, meta_dir,
+        fixed=not args.no_fixed, no_chest_filter=args.no_chest_filter, max_combined_gb=max_combined_gb, cfg=cfg,
     )
 
     print(f"done. Scans are in {out_dir} (matches configs/data.yaml's default paths.raw_dir). "

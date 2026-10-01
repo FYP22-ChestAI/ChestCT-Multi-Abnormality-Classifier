@@ -49,12 +49,11 @@ src/chestct/preprocessing/
   dataset.py                  the M1 -> M3/M4 hand-off (label_cols optional, for training vs. inference; M1 itself never has labels)
 src/chestct/inference.py     the inference front door -- one scan or a batch, shares pipeline.py's core
 scripts/
-  download_subset.py         one combined CT-RATE download from Hugging Face (--n-train/--n-val/--n-test/--seed; needs your own login)
-  build_manifest.py          Step 3 CLI, one named source at a time (--source-name, --raw-dir, --n-train/--n-val/--n-test/--seed, --append); no labels, ever
+  download_subset.py         one combined CT-RATE download from Hugging Face (needs your own login); runs with no arguments (configs/data.yaml defaults), or override --n-train/--n-val/--n-test/--seed
+  build_manifest.py          Step 3 CLI, one named source at a time (--source-name, --raw-dir, --append); runs with no --n-train/--n-val/--n-test/--seed (config defaults), auto-detects patient_id_source for DICOM; no labels, ever
   preprocess_all.py          Steps 5-9 CLI (parallel, resumable via cache fingerprint, --device)
   qc_report.py               Step 8 CLI
   stage_folder.py            copy scans from a Drive mount to local disk (resumable)
-  dicom_tags.py              print what the DICOM tags of a scan contain (header-only)
 tests/                       pytest, all using synthetic data -- no CT-RATE download needed to run them
 ```
 
@@ -79,30 +78,30 @@ pip install torch
    and log in locally (`pip install huggingface_hub && huggingface-cli login`).
    Do this yourself -- don't share your token with anyone or commit it.
 
-2. **Download a small pilot subset** (e.g. 4 train + 1 val scans from
-   CT-RATE's official TRAIN pool, 1 test scan from its official VALID pool,
-   from the corrected `_fixed` folder by default -- fast, never lists the
+2. **Download a small pilot subset.** With no arguments at all, this uses
+   `configs/data.yaml`'s `sources.ctrate` defaults (4 train + 1 val scans
+   from CT-RATE's official TRAIN pool, 1 test scan from its official VALID
+   pool, screened to skip anything needing over 1.5 GB of resample memory --
+   from the corrected `_fixed` folder by default, fast, never lists the
    whole repository, and picked at random rather than "the first N
    alphabetically"):
    ```bash
-   python scripts/download_subset.py --n-train 4 --n-val 1 --n-test 1 --seed 0 --out-dir data/raw
+   python scripts/download_subset.py
    ```
-   Scans land flat in `data/raw/`; metadata (never labels -- this pipeline
-   doesn't read them) lands flat in `data/metadata/`. Add
-   `--max-combined-gb 1.5` to skip volumes whose estimated resample memory
-   footprint would be too large for a small machine (uses the metadata
-   already fetched -- no extra download needed just to screen candidates).
+   Override any of the defaults on the command line, e.g.
+   `--n-train 40 --n-val 10 --n-test 10 --seed 0` for a bigger, reproducible
+   run. Scans land flat in `data/raw/`; metadata (never labels -- this
+   pipeline doesn't read them) lands flat in `data/metadata/`.
 
 3. **Build the manifest** (Step 3 -- ids, patient-level splits; no labels).
    Run once per named source in `configs/data.yaml`'s `sources:`, with
    `--append` after the first, to accumulate several sources (e.g. CT-RATE
-   and later local NHRD data) into one manifest. Use the SAME
-   `--n-train`/`--n-val`/`--seed` as the download step so the split is
-   reproducible:
+   and later local NHRD data) into one manifest. With no `--n-train`/`--n-val`/
+   `--seed`, this uses the SAME `configs/data.yaml` defaults the download
+   step used, so the split is reproducible without repeating them:
    ```bash
    python scripts/build_manifest.py --source-name ctrate --builder ctrate \
-     --raw-dir data/raw --metadata data/metadata/train_metadata.csv \
-     --n-train 4 --n-val 1 --seed 0
+     --raw-dir data/raw --metadata data/metadata/train_metadata.csv
    ```
 
 4. **Preprocess** (Steps 5-9 -- HU calibration, spacing, crop, resize, save):

@@ -103,7 +103,7 @@ def build_manifest_folder(
     root: str | Path,
     entries: list[ScanEntry],
     patient_depth: int = 1,
-    patient_id_source: str = "path",
+    patient_id_source: str = "auto",
 ) -> pd.DataFrame:
     """One row per discovered scan, for any folder of NIfTI files or DICOM
     series (e.g. the local NHRD data). No labels, and no split assigned here
@@ -113,13 +113,26 @@ def build_manifest_folder(
     Identity comes from the relative scan_path plus, when a folder holds more
     than one series, a short suffix of that series' own tag (never a fake
     sub-path -- scan_path always stays a literal, directly-openable folder).
-    Patients are grouped by folder depth or by the DICOM PatientID tag -- see
-    SourceConfig. For DICOM the acquisition fields are read from the tags
-    (there is no metadata CSV); date and identifying tags are deliberately
-    not recorded.
+
+    Patients are grouped by folder depth or by the DICOM PatientID tag.
+    ``patient_id_source="auto"`` (the default) decides between them itself,
+    from the SAME per-scan tag reads this function already does for the
+    acquisition columns (no extra file reads): it only switches to tag-based
+    grouping when PatientID is present AND distinct across every DICOM scan
+    found. Real hospital data is routinely anonymised before being shared for
+    research, which strips this tag entirely -- defaulting to the
+    always-safe folder-depth fallback and only upgrading on positive,
+    confirming evidence avoids silently grouping by a tag that turns out to
+    be missing or (worse) accidentally shared between two different real
+    patients. Pass "path" or "dicom_tag" explicitly to force one or the
+    other without the auto-check. For DICOM the acquisition fields are read
+    from the tags (there is no metadata CSV); date and identifying tags are
+    deliberately not recorded.
     """
     root = Path(root)
-    rows = []
+    rows: list[dict] = []
+    dicom_rows: list[tuple[dict, dict]] = []  # (row, summary) -- reused for the auto-check below
+
     for e in entries:
         vid = make_scan_id(e.scan_path, e.series_uid if e.format == "dicom" else None)
         row = {
@@ -135,13 +148,32 @@ def build_manifest_folder(
                 summary = summarize_dicom_folder(root / e.scan_path, series_uid=e.series_uid)
                 for col in ACQUISITION_COLUMNS:
                     row[col] = summary.get(col)
-                if patient_id_source == "dicom_tag" and summary.get("patient_id_present"):
-                    row["patient_id"] = "dicom_" + summary["patient_id_hash"]
                 if "geometry_problem" in summary:
                     row["manifest_problem"] = summary["geometry_problem"]
+                dicom_rows.append((row, summary))
             except DicomReadError as exc:
                 row["manifest_problem"] = str(exc)
         rows.append(row)
+
+    resolved_source = patient_id_source
+    if patient_id_source == "auto":
+        hashes = [s.get("patient_id_hash", "") for _, s in dicom_rows]
+        present = sum(1 for h in hashes if h)
+        distinct = len({h for h in hashes if h})
+        if dicom_rows and present == len(hashes) and distinct == present:
+            resolved_source = "dicom_tag"
+            print(f"PatientID present and distinct on {present}/{len(hashes)} DICOM scan(s) -- using patient_id_source=dicom_tag")
+        else:
+            resolved_source = "path"
+            print(
+                f"PatientID missing or not distinct on {present}/{len(hashes)} DICOM scan(s) -- "
+                f"using patient_id_source=path (patient_path_depth={patient_depth})"
+            )
+
+    if resolved_source == "dicom_tag":
+        for row, summary in dicom_rows:
+            if summary.get("patient_id_present"):
+                row["patient_id"] = "dicom_" + summary["patient_id_hash"]
 
     manifest = pd.DataFrame(rows)
     if manifest.empty:

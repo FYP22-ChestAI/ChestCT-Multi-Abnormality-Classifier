@@ -307,8 +307,8 @@ def _acquisition_meta(first, n_files: int) -> dict:
 
 def summarize_dicom_folder(folder: str | Path, series_uid: str | None = None) -> dict:
     """Header-only summary of one scan (no pixel data is decoded, so this is
-    fast). Feeds both the manifest's acquisition columns and
-    scripts/dicom_tags.py -- the quick look at what the real tags contain.
+    fast). Feeds build_manifest_folder()'s acquisition columns AND its
+    automatic patient_id_source="auto" decision, from the same reads.
     ``n_series`` always reports how many DISTINCT series exist in the whole
     folder, even when ``series_uid`` narrows the rest of the summary to just
     one of them -- so a mixed folder is still visibly flagged as such."""

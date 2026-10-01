@@ -40,15 +40,29 @@ class SourceConfig:
     format: str = "nifti"  # "nifti", "dicom", or "auto" (detect from the files found)
     raw_dir: str = "data/raw"  # default location; overridable at run time with --source-root / --raw-dir
     manifest_builder: str = "ctrate"  # a key in chestct.preprocessing.manifest.MANIFEST_BUILDERS
-    # How scans are grouped into patients for patient-level splitting. "path"
-    # uses the first `patient_path_depth` folder levels (NHRD: depth 1, since
-    # every top folder is one patient and 'P00001' repeats across them);
-    # "dicom_tag" uses the DICOM PatientID tag when present, else falls back to path.
-    patient_id_source: str = "path"
+    # How scans are grouped into patients for patient-level splitting. "auto"
+    # (the default) decides for itself, per source, from the DICOM PatientID
+    # tag's actual presence/uniqueness (see build_manifest_folder); "path"
+    # forces the first `patient_path_depth` folder levels (NHRD: depth 1,
+    # since every top folder is one patient and 'P00001' repeats across
+    # them); "dicom_tag" forces the tag even if the auto-check would not
+    # have picked it.
+    patient_id_source: str = "auto"
     patient_path_depth: int = 1
     # Per-source overrides of the global `qc:` thresholds (a local protocol may
     # legitimately differ from CT-RATE), e.g. {"min_slices": 60}.
     qc: dict = field(default_factory=dict)
+    # Acquisition amounts -- how many patients scripts/download_subset.py and
+    # scripts/build_manifest.py use when no --n-train/--n-val/--n-test/--seed
+    # is given on the command line. None means "this value is required on
+    # the command line for this source" (no sensible one-size-fits-all
+    # default exists yet); set real numbers here once you know your usual
+    # pilot/production sizes, so the scripts run with zero arguments.
+    n_train: int | None = None
+    n_val: int | None = None
+    n_test: int | None = None
+    seed: int = 0
+    max_combined_gb: float | None = None  # CT-RATE only; skips volumes needing too much resample memory
 
 
 @dataclass

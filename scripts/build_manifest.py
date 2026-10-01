@@ -9,22 +9,26 @@ A "source" is one entry under `sources:` in configs/data.yaml. Run this once
 per source, with --append after the first, to accumulate all of them into one
 unified manifest.csv, distinguished by the `source_name` column.
 
+With no --n-train/--n-val/--n-test/--seed at all, each source's own
+configs/data.yaml defaults are used (a small pilot size out of the box).
+Override any of them to change the amount or reproduce a different split.
+
 CT-RATE (NIfTI, ids like train_1_a_1) -- point --raw-dir at whatever
 scripts/download_subset.py just downloaded, and pass the SAME n-train/n-val
 and seed so the val cut is reproducible:
 
     python scripts/build_manifest.py --source-name ctrate \\
-        --builder ctrate --raw-dir data/raw --metadata data/metadata/train_metadata.csv \\
-        --n-train 40 --n-val 10 --seed 0
+        --builder ctrate --raw-dir data/raw --metadata data/metadata/train_metadata.csv
 
 Any folder of DICOM series or NIfTI files -- e.g. the local NHRD data, on a
 Drive mount, an SSD or a server; the folder is given at run time and can have
 any layout (every DICOM series -- grouped by SeriesInstanceUID, not just
-folder location -- or NIfTI file is one scan):
+folder location -- or NIfTI file is one scan). Patients are grouped by the
+DICOM PatientID tag or by folder depth -- "auto" (the default) decides for
+itself, from whether the tag actually survived any anonymisation:
 
     python scripts/build_manifest.py --source-name nhrd_local --append \\
-        --builder folder --raw-dir /content/local_scans/nhrd \\
-        --n-train 30 --n-val 5 --n-test 5 --seed 0
+        --builder folder --raw-dir /content/local_scans/nhrd
 
 Splitting is always by PATIENT, at a fixed amount (not a ratio) so the same
 --n-train/--n-val/--n-test/--seed on the same raw-dir always reproduces the
@@ -79,11 +83,11 @@ def main() -> None:
     ap.add_argument("--builder", default=None, help="'ctrate' or 'folder'; overrides the source's manifest_builder")
     ap.add_argument("--metadata", default=None, help="CT-RATE metadata csv (optional; acquisition fields only, never labels)")
     ap.add_argument("--patient-path-depth", type=int, default=None, help="folder sources: folder levels that identify a patient (used only as a fallback when the DICOM PatientID tag is absent)")
-    ap.add_argument("--patient-id-source", default=None, help="folder sources: 'path' or 'dicom_tag'")
-    ap.add_argument("--n-train", type=int, required=True, help="patients assigned to train")
-    ap.add_argument("--n-val", type=int, required=True, help="patients assigned to val")
-    ap.add_argument("--n-test", type=int, default=0, help="folder sources: patients assigned to test (CT-RATE: its own valid-source patients become test directly, so leave this 0)")
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--patient-id-source", default=None, help="folder sources: 'auto' (default), 'path' or 'dicom_tag'")
+    ap.add_argument("--n-train", type=int, default=None, help="patients assigned to train (default: this source's configs/data.yaml n_train)")
+    ap.add_argument("--n-val", type=int, default=None, help="patients assigned to val (default: this source's configs/data.yaml n_val)")
+    ap.add_argument("--n-test", type=int, default=None, help="folder sources: patients assigned to test (CT-RATE: its own valid-source patients become test directly, so leave this 0; default: this source's configs/data.yaml n_test, else 0)")
+    ap.add_argument("--seed", type=int, default=None, help="default: this source's configs/data.yaml seed, else 0")
     ap.add_argument("--config", default="configs/data.yaml")
     ap.add_argument("--append", action="store_true", help="append to an existing manifest.csv instead of overwriting")
     args = ap.parse_args()
@@ -100,6 +104,17 @@ def main() -> None:
     fmt = args.format or source_cfg.format
     builder = args.builder or (source_cfg.manifest_builder if args.source_name in cfg.sources else FOLDER_BUILDER)
 
+    n_train = args.n_train if args.n_train is not None else source_cfg.n_train
+    n_val = args.n_val if args.n_val is not None else source_cfg.n_val
+    n_test = args.n_test if args.n_test is not None else (source_cfg.n_test if source_cfg.n_test is not None else 0)
+    seed = args.seed if args.seed is not None else source_cfg.seed
+    if n_train is None or n_val is None:
+        raise SystemExit(
+            f"no --n-train/--n-val given, and no default is set in configs/data.yaml's "
+            f"sources.{args.source_name}.n_train/n_val -- pass them explicitly, or add defaults to the config"
+        )
+    print(f"using: n_train={n_train}, n_val={n_val}, n_test={n_test}, seed={seed} (override any of these with --n-train etc.)")
+
     if builder == FOLDER_BUILDER:
         if args.metadata:
             print("note: --metadata is not used for folder sources")
@@ -114,7 +129,7 @@ def main() -> None:
             patient_id_source=args.patient_id_source or source_cfg.patient_id_source,
         )
         patients = manifest["patient_id"].unique().tolist()
-        split_map = assign_splits_by_amount(patients, args.n_train, args.n_val, args.n_test, seed=args.seed)
+        split_map = assign_splits_by_amount(patients, n_train, n_val, n_test, seed=seed)
         manifest["split"] = manifest["patient_id"].map(split_map)
         before = len(manifest)
         manifest = manifest[manifest["split"].notna()].copy()
@@ -134,7 +149,7 @@ def main() -> None:
         # set (proposal 4.2.1) -- never mixed into train/val.
         train_mask = manifest["source_split"] == "train"
         train_patients = manifest.loc[train_mask, "patient_id"].unique().tolist()
-        split_map = assign_splits_by_amount(train_patients, args.n_train, args.n_val, n_test=0, seed=args.seed)
+        split_map = assign_splits_by_amount(train_patients, n_train, n_val, n_test=0, seed=seed)
         manifest["split"] = manifest["patient_id"].map(split_map)
         manifest.loc[manifest["source_split"] == "valid", "split"] = "test"
         before = len(manifest)

@@ -111,7 +111,11 @@ def _nhrd_tree(root, dicom_writer, hu):
 
 def test_folder_manifest_has_no_labels_and_patients_do_not_collide(tmp_path, dicom_writer, synthetic_hu):
     root = _nhrd_tree(tmp_path, dicom_writer, synthetic_hu)
-    m = build_manifest_folder(root, discover_scans(root), patient_depth=1)
+    # patient_id_source="path" pinned explicitly: this test is about folder-depth
+    # grouping specifically, not the "auto" default's own decision (covered below) --
+    # _nhrd_tree's fixture happens to give each folder a distinct PatientID tag too,
+    # which "auto" would otherwise (correctly) prefer.
+    m = build_manifest_folder(root, discover_scans(root), patient_depth=1, patient_id_source="path")
 
     assert m["volume_id"].iloc[0].startswith("4203-26_P00001_S0001")
     assert m["volume_id"].iloc[1].startswith("4214-26_P00001_S0001")
@@ -129,6 +133,27 @@ def test_folder_manifest_can_group_patients_by_dicom_tag(tmp_path, dicom_writer,
     root = _nhrd_tree(tmp_path, dicom_writer, synthetic_hu)
     m = build_manifest_folder(root, discover_scans(root), patient_id_source="dicom_tag")
     assert m["patient_id"].str.startswith("dicom_").all() and m["patient_id"].nunique() == 2
+
+
+def test_folder_manifest_auto_prefers_dicom_tag_when_present_and_distinct(tmp_path, dicom_writer, synthetic_hu, capsys):
+    # _nhrd_tree's fixture gives each top folder its own distinct PatientID tag --
+    # "auto" (the default) should confirm that and use it, same as explicit "dicom_tag".
+    root = _nhrd_tree(tmp_path, dicom_writer, synthetic_hu)
+    m = build_manifest_folder(root, discover_scans(root), patient_depth=1)
+    assert m["patient_id"].str.startswith("dicom_").all() and m["patient_id"].nunique() == 2
+    assert "using patient_id_source=dicom_tag" in capsys.readouterr().out
+
+
+def test_folder_manifest_auto_falls_back_to_path_when_patient_id_is_missing(tmp_path, dicom_writer, synthetic_hu, capsys):
+    # write_dicom_series' default patient_id ("ANON01") is the SAME for every
+    # call unless overridden -- simulating anonymised real data where the tag
+    # survives but no longer distinguishes different patients.
+    folder = tmp_path / "x"
+    dicom_writer(folder / "4203-26" / "P00001" / "S0001", synthetic_hu[:6])
+    dicom_writer(folder / "4214-26" / "P00001" / "S0001", synthetic_hu[:6])
+    m = build_manifest_folder(folder, discover_scans(folder), patient_depth=1)
+    assert list(m["patient_id"]) == ["4203-26", "4214-26"]
+    assert "using patient_id_source=path" in capsys.readouterr().out
 
 
 def test_folder_manifest_splits_a_mixed_series_folder_into_two_rows(tmp_path, dicom_writer, synthetic_hu):

@@ -2,7 +2,7 @@
 # were chosen. Changing anything under `preprocess` or `windows` changes the
 # .npy cache; a stale cache is detected automatically (see
 # chestct.preprocessing.preprocess.is_cache_fresh) and reprocessed rather than reused.
-
+ 
 paths:
   raw_dir: data/raw
   cache_dir: data/cache
@@ -28,6 +28,14 @@ sources:
     format: nifti
     raw_dir: data/raw
     manifest_builder: ctrate
+    # Pilot-sized defaults -- running `download_subset.py`/`build_manifest.py`
+    # with no --n-train/--n-val/--n-test/--seed at all uses these. Override
+    # on the command line for a real (non-pilot) run.
+    n_train: 4
+    n_val: 1
+    n_test: 1
+    seed: 0
+    max_combined_gb: 1.5
   # Local hospital data: any folder of DICOM series (or NIfTI files). The folder
   # is normally given at run time (--raw-dir / --source-root), so raw_dir here is
   # only a placeholder. Every DICOM series (grouped by SeriesInstanceUID, not
@@ -37,8 +45,12 @@ sources:
     format: dicom                 # or "auto" to detect
     raw_dir: data/raw_nhrd
     manifest_builder: folder
-    patient_id_source: path       # or "dicom_tag" (falls back to path if the tag is empty)
+    patient_id_source: auto       # decides path vs dicom_tag itself -- see build_manifest_folder
     patient_path_depth: 1         # NHRD: each top folder (e.g. 4214-26) is one patient
+    n_train: 30
+    n_val: 5
+    n_test: 5
+    seed: 0
     # qc:                         # per-source overrides of the global `qc:` below
     #   min_slices: 60
 

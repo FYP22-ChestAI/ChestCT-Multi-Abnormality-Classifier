@@ -273,10 +273,18 @@ a short suffix of the series' own tag), `patient_id`, `scan_path`, `format`,
 (manufacturer, model, kernel, slice thickness, series description, contrast
 flag, transfer syntax). Acquisition dates and identifying tags are
 deliberately never recorded. `P00001` repeats across the top folders, so a
-patient is identified by `patient_path_depth: 1` (the top folder, kept as
-the default/fallback) or, with `patient_id_source: dicom_tag`, by a hash of
-the DICOM PatientID tag (falling back to the path if the tag is empty).
-`scripts/dicom_tags.py` shows which of these the real files support.
+patient is identified by `patient_path_depth: 1` (the top folder) or by a
+hash of the DICOM PatientID tag. `patient_id_source: auto` (the default)
+decides between the two itself, from the same tag reads it's already doing
+for the acquisition columns above -- no separate inspection script needed.
+It only switches to the tag when PatientID is present AND distinct across
+every DICOM scan found, printing which it picked and why; real hospital
+data is routinely anonymised before being shared for research, which
+strips this tag entirely, so defaulting to the always-safe folder-depth
+fallback and only upgrading on positive, confirming evidence avoids
+silently grouping by a tag that turns out to be missing or shared. Pass
+`patient_id_source: path` or `dicom_tag` explicitly to force one or the
+other without the auto-check.
 
 **Getting files from Drive:** Colab's Drive mount only shows My Drive, so a
 folder shared with you needs a shortcut added to My Drive first. Reading many
