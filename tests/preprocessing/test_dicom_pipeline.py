@@ -1,8 +1,5 @@
-"""DICOM through the shared pipeline, the folder manifest, staging, the
-raw-data stale-cache guard, and the scripts run for real."""
-import json
-import subprocess
-import sys
+"""DICOM through the shared pipeline, the folder manifest, the raw-data
+stale-cache guard and per-source QC overrides."""
 from pathlib import Path
 
 import numpy as np
@@ -11,14 +8,12 @@ import pytest
 
 from ct_preprocessing.config import DataConfig, PathsConfig, SourceConfig
 from ct_preprocessing.dicom_loader import discover_scans
-from ct_preprocessing.manifest import build_manifest, build_manifest_folder
+from ct_preprocessing.manifest import build_manifest_ctrate, build_manifest_folder
 from ct_preprocessing.pipeline import process_scan
 from ct_preprocessing.preprocess import PreprocessConfig, is_cache_fresh, preprocess_one
 from ct_preprocessing.quality import QCThresholds
-from ct_preprocessing.staging import stage_tree
 from ct_preprocessing.inference import run_inference
 
-REPO = Path(__file__).resolve().parents[2]
 CFG = PreprocessConfig(target_size_hw=(48, 48))
 RELAXED = QCThresholds(min_slices=10)
 NIFTI_ORIENTATION = (-1, 0, 0, 0, -1, 0)  # DICOM orientation matching the NIfTI fixture's x->R, y->A
@@ -169,27 +164,10 @@ def test_folder_manifest_splits_a_mixed_series_folder_into_two_rows(tmp_path, di
 
 
 def test_ctrate_manifest_works_without_labels():
-    m = build_manifest(["train_1_a_1", "train_1_a_2"], None)
+    m = build_manifest_ctrate(["train_1_a_1", "train_1_a_2"], None)
     assert list(m["volume_id"]) == ["train_1_a_1", "train_1_a_2"]
     assert list(m["scan_path"]) == ["train_1_a_1.nii.gz", "train_1_a_2.nii.gz"]
     assert set(m["format"]) == {"nifti"}
-
-
-# ------------------------------------------------------------------ staging
-def test_stage_tree_copies_resumes_and_filters(tmp_path, dicom_writer, synthetic_hu):
-    src = _nhrd_tree(tmp_path / "drive", dicom_writer, synthetic_hu)
-    dst = tmp_path / "local"
-
-    first = stage_tree(src, dst, only_folders=["4214-26"], workers=2)
-    assert first["copied"] == 6 and first["skipped"] == 0
-    assert not (dst / "4203-26").exists()
-
-    again = stage_tree(src, dst, only_folders=["4214-26"], workers=2)
-    assert again["copied"] == 0 and again["skipped"] == 6  # resumable
-
-    assert [e.scan_path for e in discover_scans(dst)] == ["4214-26/P00001/S0001"]
-    with pytest.raises(FileNotFoundError):
-        stage_tree(tmp_path / "missing", dst)
 
 
 # ------------------------------------------------------------------- config
@@ -201,62 +179,3 @@ def test_per_source_qc_overrides():
     assert cfg.qc_for("local").min_slices == 30
     assert cfg.qc_for("local").max_slices == cfg.qc.max_slices  # everything else inherited
     assert cfg.qc_for("other").min_slices == 80 and cfg.qc_for(None).min_slices == 80
-
-
-# ------------------------------------------------- the scripts, run for real
-def _run(*args):
-    proc = subprocess.run([sys.executable, *map(str, args)], cwd=REPO, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    return proc.stdout
-
-
-def test_scripts_end_to_end_on_a_dicom_folder_given_at_run_time(tmp_path, dicom_writer, synthetic_hu):
-    drive = _nhrd_tree(tmp_path / "some_mount", dicom_writer, synthetic_hu)
-    work = tmp_path / "work"
-    cfg_path = work / "data.yaml"
-    work.mkdir()
-    cfg_path.write_text(
-        f"""
-paths:
-  raw_dir: {work / 'unused'}
-  cache_dir: {work / 'cache'}
-  manifest_path: {work / 'manifest.csv'}
-  qc_report_path: {work / 'qc.csv'}
-  montage_dir: {work / 'montages'}
-  preprocessing_manifest_path: {work / 'pp.json'}
-sources:
-  nhrd_local:
-    format: dicom
-    raw_dir: {work / 'placeholder'}
-    manifest_builder: folder
-    patient_path_depth: 1
-    qc: {{min_slices: 3}}
-preprocess:
-  target_size_hw: [32, 32]
-"""
-    )
-
-    # the folder is only ever given on the command line; no absolute path is stored
-    _run("scripts/preprocessing/build_manifest.py", "--config", cfg_path, "--source-name", "nhrd_local",
-         "--raw-dir", drive, "--n-train", "2", "--n-val", "0", "--n-test", "0")
-    manifest = pd.read_csv(work / "manifest.csv")
-    assert len(manifest) == 2 and set(manifest["source_name"]) == {"nhrd_local"}
-    assert set(manifest["split"]) == {"train"}
-    assert "Cardiomegaly" not in manifest.columns  # no labels involved anywhere
-
-    out = _run("scripts/preprocessing/preprocess_all.py", "--config", cfg_path, "--workers", 1,
-               "--source-root", f"nhrd_local={drive}")
-    assert "2 ok, 0 failed" in out
-    assert len(list((work / "cache").glob("*.npy"))) == 2
-
-    again = _run("scripts/preprocessing/preprocess_all.py", "--config", cfg_path, "--workers", 1,
-                 "--source-root", f"nhrd_local={drive}")
-    assert "0 volumes to process (2 already cached" in again
-
-    _run("scripts/preprocessing/qc_report.py", "--config", cfg_path)
-    qc = pd.read_csv(work / "qc.csv")
-    assert len(qc) == 2 and qc["passed"].all()  # per-source min_slices=3 applied
-
-    [sidecar_path] = (work / "cache").glob("4203-26_P00001_S0001*.meta.json")
-    sidecar = json.loads(sidecar_path.read_text())
-    assert "source_signature" in sidecar and "fingerprint" in sidecar

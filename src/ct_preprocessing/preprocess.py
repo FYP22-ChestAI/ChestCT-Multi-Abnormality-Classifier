@@ -22,7 +22,10 @@ from .pipeline import process_scan
 from .preprocess_config import PreprocessConfig
 from .quality import QCThresholds
 
-__all__ = ["PreprocessConfig", "PreprocessResult", "preprocess_one", "config_fingerprint"]
+__all__ = [
+    "PreprocessConfig", "PreprocessResult", "preprocess_one", "config_fingerprint",
+    "is_cache_fresh", "load_cached_stats",
+]
 
 
 @dataclass
@@ -47,8 +50,15 @@ def config_fingerprint(cfg: PreprocessConfig) -> str:
     different config (e.g. before switching CT-RATE download folders, or
     after any preprocessing setting changed), it must NOT be silently reused
     -- see docs/preprocessing/data_contract.md for the bug this fixes.
+
+    ``device`` is deliberately left out: running the same settings on a CPU or
+    a GPU produces the same cache, so switching devices must not make every
+    cached volume look stale (raw data is gone after ingest, so a false "stale"
+    could not even be repaired).
     """
-    payload = json.dumps(asdict(cfg), sort_keys=True).encode("utf-8")
+    settings = asdict(cfg)
+    settings.pop("device", None)
+    payload = json.dumps(settings, sort_keys=True).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
@@ -66,13 +76,13 @@ def preprocess_one(
     """Run the full Phase-1 pipeline on one scan (NIfTI file or DICOM folder)
     and save it to disk.
 
-    This is a thin, training-side wrapper around pipeline.process_scan() --
-    the shared core that a future single-scan inference entry point also
-    calls, so the two can never process a scan differently. This function's
-    own job is only: persist the result to disk, always (regardless of QC
-    outcome -- QC exclusion for training happens later, in qc_report.py /
-    scripts/preprocess_all.py, not here), and write a config-fingerprint
-    sidecar so a later run can tell a stale cache from a fresh one.
+    This is a thin, cache-side wrapper around pipeline.process_scan() -- the
+    shared core that inference (inference.run_inference) also calls, so the
+    two can never process a scan differently. This function's own job is only:
+    persist the result to disk, always (regardless of QC outcome -- exclusion
+    happens later, in scripts/preprocessing/qc_report.py and assign_splits.py,
+    not here), and write a sidecar (config fingerprint, raw-input signature,
+    per-volume stats) so a later run can tell a stale cache from a fresh one.
 
     Never raises on a bad input file -- failures are captured and returned as
     a result with ``ok=False`` and an ``error`` message, so a batch run over
@@ -95,6 +105,15 @@ def preprocess_one(
     np.save(out_path, out)
 
     fingerprint = config_fingerprint(cfg)
+    sz, sy, sx = result.spacing_after_resample
+    stats = {
+        "n_slices": int(out.shape[0]),
+        "spacing_z_mm": sz,
+        "spacing_y_mm": sy,
+        "spacing_x_mm": sx,
+        "crop_shape": "x".join(map(str, result.crop_shape)),
+        "qc_passed": bool(result.qc.passed) if result.qc is not None else None,
+    }
     meta_path = out_dir / f"{vid}.meta.json"
     meta_path.write_text(
         json.dumps(
@@ -107,6 +126,9 @@ def preprocess_one(
                 "loader_checks": {
                     k: result.meta[k] for k in ("z_uniform", "slice_axis_tilt_deg") if result.meta and k in result.meta
                 },
+                # per-volume numbers the manifest carries; kept here too so a chunk
+                # resumed after a crash can rebuild them without reprocessing
+                "stats": stats,
             }
         )
     )
@@ -122,6 +144,20 @@ def preprocess_one(
         crop_shape=result.crop_shape,
         qc_passed=result.qc.passed if result.qc is not None else None,
     )
+
+
+def load_cached_stats(cache_dir: str | Path, volume_id: str) -> dict | None:
+    """The per-volume stats preprocess_one recorded next to the cache file
+    (n_slices, spacing_*_mm, crop_shape, qc_passed, npy_path), or None if the
+    sidecar is missing/unreadable or predates this field."""
+    cache_dir = Path(cache_dir)
+    try:
+        stats = json.loads((cache_dir / f"{volume_id}.meta.json").read_text()).get("stats")
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not stats:
+        return None
+    return {**stats, "npy_path": str(cache_dir / f"{volume_id}.npy")}
 
 
 def is_cache_fresh(

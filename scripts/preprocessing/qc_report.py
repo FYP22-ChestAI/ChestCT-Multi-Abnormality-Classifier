@@ -1,46 +1,56 @@
-"""Step 8: run quality checks over every cached .npy, save qc_report.csv and
-montage PNGs for eyeballing.
+"""Step 4: quality-check every cached volume.
 
-Usage:
-    python scripts/qc_report.py --config configs/preprocessing.yaml --montage-every 25
+    python scripts/preprocessing/qc_report.py
+
+Re-checks each cached .npy listed in data/manifest.csv (with the per-source QC
+thresholds from the config), writes data/qc_report.csv (pass/fail, reasons,
+HU stats) and montage PNGs for a human to eyeball. Review the failures, then
+run assign_splits.py: volumes that failed QC are excluded BEFORE patients are
+assigned, so val/test counts mean usable patients.
+
+Separate from ingest on purpose: it can be re-run any time (e.g. after tuning a
+threshold in the config) without touching a single raw scan.
 """
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from ct_preprocessing.cli import add_config_arg, friendly_errors, show_settings
 from ct_preprocessing.config import load_config
 from ct_preprocessing.pipeline import apply_loader_checks
 from ct_preprocessing.quality import check_volume, save_montage
 
 
-def main() -> None:
+@friendly_errors
+def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default="configs/preprocessing.yaml")
+    add_config_arg(ap)
     ap.add_argument(
-        "--montage-every",
-        type=int,
-        default=25,
-        help="save a montage for 1 in every N scans, plus every scan that fails a check",
+        "--montage-every", type=int, default=25,
+        help="save a montage for 1 in every N volumes, plus every volume that fails a check",
     )
+    ap.add_argument("--source", default=None, help="check only this source's volumes")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    show_settings("using", dict(manifest=cfg.paths.manifest_path, montage_every=args.montage_every, source=args.source or "all"))
     manifest = pd.read_csv(cfg.paths.manifest_path)
+    if args.source:
+        manifest = manifest[manifest["source_name"] == args.source]
     cache_dir = Path(cfg.paths.cache_dir)
     montage_dir = Path(cfg.paths.montage_dir)
     montage_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    for i, row in manifest.iterrows():
+    for n, (_, row) in enumerate(manifest.iterrows()):
         npy_path = cache_dir / f"{row['volume_id']}.npy"
         if not npy_path.exists():
-            rows.append({"volume_id": row["volume_id"], "passed": False, "reasons": "not preprocessed yet", "flags": ""})
+            rows.append({"volume_id": row["volume_id"], "passed": False, "reasons": "not preprocessed", "flags": ""})
             continue
 
         arr = np.load(npy_path)
@@ -48,7 +58,7 @@ def main() -> None:
         source_name = row["source_name"] if "source_name" in row and pd.notna(row["source_name"]) else None
         result = check_volume(row["volume_id"], arr, spacing, cfg.qc_for(source_name))
         sidecar = cache_dir / f"{row['volume_id']}.meta.json"
-        if sidecar.exists():  # DICOM geometry checks recorded at preprocessing time
+        if sidecar.exists():  # geometry checks recorded at preprocessing time (DICOM)
             apply_loader_checks(result, json.loads(sidecar.read_text()).get("loader_checks", {}))
         rows.append(
             {
@@ -59,9 +69,10 @@ def main() -> None:
                 **result.stats,
             }
         )
-
-        if not result.passed or i % args.montage_every == 0:
+        if not result.passed or n % args.montage_every == 0:
             save_montage(arr, montage_dir / f"{row['volume_id']}.png")
+        if (n + 1) % 1000 == 0:
+            print(f"  checked {n + 1}/{len(manifest)}", flush=True)
 
     qc_df = pd.DataFrame(rows)
     out_path = Path(cfg.paths.qc_report_path)
@@ -69,7 +80,9 @@ def main() -> None:
     qc_df.to_csv(out_path, index=False)
     print(f"{int(qc_df['passed'].sum())} / {len(qc_df)} passed -> {out_path}")
     print(f"montages saved to {montage_dir}")
+    print("next: python scripts/preprocessing/assign_splits.py")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

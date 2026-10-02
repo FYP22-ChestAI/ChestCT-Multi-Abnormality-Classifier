@@ -1,57 +1,72 @@
-# M1 data contract settings -- see docs/preprocessing/data_contract.md for why these values
-# were chosen. Changing anything under `preprocess` changes the
-# .npy cache; a stale cache is detected automatically (see
-# ct_preprocessing.preprocess.is_cache_fresh) and reprocessed rather than reused.
- 
+# Preprocessing pipeline settings -- see docs/preprocessing/README.md and
+# docs/preprocessing/data_contract.md for why these values were chosen.
+#
+# Every value here is a DEFAULT. Each script takes a command-line argument that
+# overrides it for one run (e.g. `ingest.py --min-free-gb 150`), and prints the
+# settings it actually used as its first line.
+#
+# IMPORTANT: raw scans are deleted after every ingest chunk, so changing
+# anything under `preprocess` AFTER a large ingest means fetching everything
+# again. Settle `preprocess` with a small pilot run first. A stale cache is
+# detected automatically (see ct_preprocessing.preprocess.is_cache_fresh).
+
 paths:
-  raw_dir: data/raw
-  cache_dir: data/cache
+  raw_dir: data/raw                       # parent of each source's scratch folder
+  cache_dir: data/cache                   # the permanent output: one .npy + .meta.json per volume
   manifest_path: data/manifest.csv
   qc_report_path: data/qc_report.csv
   montage_dir: data/qc_montages
   preprocessing_manifest_path: data/preprocessing_manifest.json
+  metadata_dir: data/metadata             # CT-RATE metadata CSVs
+  worklist_dir: data/worklists            # make_worklist.py output (CT-RATE)
+  chunk_manifest_dir: data/manifests      # one small manifest per ingested chunk
+  state_dir: data/ingest_state            # .done / .failed markers, so ingest can resume
+  splits_dir: data/splits                 # frozen patient -> split files
 
-# Named data sources. Each one is just "a format + a folder" -- a plain
-# filesystem path works identically for a Hugging-Face download that landed
-# locally, a folder on this laptop, or a mounted university server; nothing
-# here needs to know which. `manifest_builder` selects the id-parsing
-# strategy in ct_preprocessing.manifest.MANIFEST_BUILDERS (never labels -- this
-# pipeline doesn't read them, for either source). See
-# scripts/build_manifest.py --source-name and docs/preprocessing/data_contract.md.
+# Named data sources. `ingest` holds the defaults for make_worklist.py / ingest.py,
+# `split` the defaults for assign_splits.py. No labels are read for any source.
 sources:
-  # One CT-RATE source covers both its official TRAIN and VALID pools --
-  # scripts/download_subset.py fetches both into the same raw_dir in one
-  # combined run (--n-train/--n-val from TRAIN, --n-test from VALID), and
-  # build_manifest.py tells them apart itself via each volume id's own
-  # train_/valid_ prefix (source_split), not via separate source entries.
+  # CT-RATE: NIfTI volumes on Hugging Face. Its train_fixed/ pool feeds train+val,
+  # its valid_fixed/ pool is the test set (the official split, kept whole).
   ctrate:
     format: nifti
-    raw_dir: data/raw
+    raw_dir: data/raw/ctrate              # scratch -- emptied after every chunk
     manifest_builder: ctrate
-    # Pilot-sized defaults -- running `download_subset.py`/`build_manifest.py`
-    # with no --n-train/--n-val/--n-test/--seed at all uses these. Override
-    # on the command line for a real (non-pilot) run.
-    n_train: 4
-    n_val: 1
-    n_test: 1
-    seed: 0
-    max_combined_gb: 1.5
-  # Local hospital data: any folder of DICOM series (or NIfTI files). The folder
-  # is normally given at run time (--raw-dir / --source-root), so raw_dir here is
-  # only a placeholder. Every DICOM series (grouped by SeriesInstanceUID, not
-  # just folder location) or NIfTI file is one scan, whatever the layout
-  # underneath. No labels are read to build the manifest.
+    ingest:
+      chunk_size: 40                      # volumes fetched + preprocessed + cleaned up together
+      train_pool: one_per_scan            # one reconstruction per scan (halves the cache); or "all"
+      test_pool: all                      # the whole valid_fixed pool
+      max_train_patients: null            # cap if the calibration run says the cache will not fit
+      max_test_patients: null             # cap the test pool -- only for small pilot runs
+      max_combined_gb: null               # skip TRAIN volumes needing more resample memory than this
+      seed: 0
+      min_free_gb: 100                    # stop cleanly when free disk drops below this
+      workers: 4                          # parallel preprocessing processes
+      fetch_workers: 4                    # parallel downloads inside one chunk
+      hf_repo: ibrahimhamamci/CT-RATE
+      est_mb_per_volume: 22               # only for the projected-size estimate; use the measured value
+    split:
+      n_val_patients: 1000                # drawn from train-pool patients; test = the valid pool
+      seed: 0
+
+  # Local hospital data (NHRD): DICOM series uploaded as .zip/.tar archives of
+  # whole patient folders (~10 GB each) to a Drive folder the server can read.
   nhrd_local:
-    format: dicom                 # or "auto" to detect
-    raw_dir: data/raw_nhrd
+    format: dicom
+    raw_dir: data/raw/nhrd_local          # scratch -- emptied after every archive
     manifest_builder: folder
-    patient_id_source: auto       # decides path vs dicom_tag itself -- see build_manifest_folder
-    patient_path_depth: 1         # NHRD: each top folder (e.g. 4214-26) is one patient
-    n_train: 30
-    n_val: 5
-    n_test: 5
-    seed: 0
-    # qc:                         # per-source overrides of the global `qc:` below
+    patient_id_source: auto               # decides path vs dicom_tag once, from the first archive
+    patient_path_depth: 1                 # NHRD: each top folder (e.g. 4214-26) is one patient
+    ingest:
+      drive_remote: "gdrive:nhrd_raw"     # an rclone remote, or a plain folder path
+      min_free_gb: 100
+      workers: 4
+      est_mb_per_volume: 22
+    split:
+      n_val_patients: 150
+      n_test_patients: 150
+      seed: 0
+    # qc:                                 # per-source overrides of the global `qc:` below
     #   min_slices: 60
 
 preprocess:
@@ -62,7 +77,7 @@ preprocess:
   crop_cc_downsample: 4                   # downsample factor for the connected-component search only (memory safety)
   resize_mode: stretch                    # "stretch" (independent W,H) or "pad" (aspect-preserving)
   min_change_ratio: 0.05                  # skip resampling an axis already this close to target
-  device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present (e.g. on Colab)
+  device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present
   version: m1-v2
 
 qc:

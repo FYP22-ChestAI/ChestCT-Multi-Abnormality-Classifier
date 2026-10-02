@@ -1,14 +1,17 @@
-"""Step 3: build the one-row-per-volume manifest and patient-level splits.
+"""Build manifest rows: one row per volume, no labels, no split.
 
-No series selection happens here -- CT-RATE files are already the chest.
-What we do handle: several *reconstructions* of the same scan (they are not
+A manifest row says what a volume IS (its ids, where it came from, how it was
+acquired) -- never which split it belongs to. Splits are decided once, later,
+by ct_preprocessing.ingest.splits, after ingest and QC, and frozen.
+
+No series selection happens here -- CT-RATE files are already the chest. What
+we do handle: several *reconstructions* of the same scan (they are not
 different body parts, just different rebuilds of the same raw data -- see
-docs/preprocessing/data_contract.md), and splitting by PATIENT so no patient's scans land
-in two splits at once.
+docs/preprocessing/data_contract.md), and a ``patient_id`` on every row so the
+later split can be made by PATIENT and no patient's scans land in two splits.
 """
 from __future__ import annotations
 
-import random
 import re
 from pathlib import Path
 
@@ -16,16 +19,25 @@ import pandas as pd
 
 from .dicom_loader import DicomReadError, ScanEntry, make_scan_id, patient_key, summarize_dicom_folder
 
-# CT-RATE volume ids look like "train_1_a_1": split, patient, scan, reconstruction.
+CTRATE_BUILDER = "ctrate"
+FOLDER_BUILDER = "folder"
+
+# CT-RATE volume ids look like "train_1_a_1": pool, patient, scan, reconstruction.
 VOLUME_ID_RE = re.compile(r"^(?P<split>train|valid)_(?P<patient>\d+)_(?P<scan>[a-z]+)_(?P<recon>\d+)$")
+
+ACQUISITION_COLUMNS = [
+    "rows", "cols", "manufacturer", "model", "kernel",
+    "slice_thickness", "series_description", "contrast", "transfer_syntax",
+]
 
 
 def parse_volume_id(volume_id: str) -> dict:
-    """Split 'train_1_a_1' into its parts.
+    """Split 'train_1_a_2' into its parts.
 
-    patient_id is split-qualified ("train_1", not just "1") so a patient
-    number is never accidentally treated as the same person across the
-    official train/valid halves.
+    patient_id is pool-qualified ("train_1", not just "1") so a patient
+    number is never accidentally treated as the same person across CT-RATE's
+    official train/valid pools. ``source_split`` records which official pool
+    the volume came from ("train" or "valid").
     """
     m = VOLUME_ID_RE.match(volume_id)
     if not m:
@@ -40,7 +52,7 @@ def parse_volume_id(volume_id: str) -> dict:
     }
 
 
-def _strip_nifti_ext(value: object) -> str:
+def strip_nifti_ext(value: object) -> str:
     """CT-RATE's own CSVs store the volume id WITH the file extension (e.g.
     'train_1_a_1.nii.gz'), but everywhere else in this package uses the bare
     id ('train_1_a_1'). Normalise both sides before joining so it doesn't
@@ -57,46 +69,25 @@ def build_manifest_ctrate(
     metadata_df: pd.DataFrame | None = None,
     id_col: str = "VolumeName",
 ) -> pd.DataFrame:
-    """CT-RATE's manifest-building strategy: parsed ids (train_1_a_1 style) +
-    optional acquisition metadata (RescaleSlope/Intercept, spacing, ...),
-    joined on VolumeName. No labels -- this pipeline never touches them, for
-    either data source; M4 joins labels on its own side, by volume_id, when
-    it needs them for supervision. See docs/preprocessing/data_contract.md.
-
-    This is one entry in MANIFEST_BUILDERS, not the only possible one -- a
-    future local (NHRD) source has a completely different id scheme and
-    registers its own strategy here instead of this function growing special
-    cases. See configs/preprocessing.yaml's `sources` section.
+    """CT-RATE rows: parsed ids (train_1_a_1 style) + optional acquisition
+    metadata (RescaleSlope/Intercept, spacing, ...) joined on VolumeName. No
+    labels -- this pipeline never touches them, for either data source; the
+    model code joins labels on its own side, by volume_id, when it needs them
+    for supervision. See docs/preprocessing/data_contract.md.
     """
-    rows = [parse_volume_id(v) for v in volume_ids]
-    manifest = pd.DataFrame(rows)
+    manifest = pd.DataFrame([parse_volume_id(v) for v in volume_ids])
 
-    if metadata_df is not None and id_col in metadata_df.columns:
-        metadata_df = metadata_df.copy()
-        metadata_df[id_col] = metadata_df[id_col].map(_strip_nifti_ext)
     if metadata_df is not None:
-        meta_indexed = metadata_df.set_index(id_col) if id_col in metadata_df.columns else metadata_df
-        manifest = manifest.join(meta_indexed, on="volume_id", rsuffix="_meta")
+        metadata_df = metadata_df.copy()
+        if id_col in metadata_df.columns:
+            metadata_df[id_col] = metadata_df[id_col].map(strip_nifti_ext)
+            metadata_df = metadata_df.set_index(id_col)
+        manifest = manifest.join(metadata_df, on="volume_id", rsuffix="_meta")
 
-    # Where each scan lives, relative to the source's root folder (never absolute).
+    # Where each scan lives, relative to the source's scratch folder (never absolute).
     manifest["scan_path"] = manifest["volume_id"] + ".nii.gz"
     manifest["format"] = "nifti"
     return manifest
-
-
-# Manifest builders that start from a list of known volume ids plus tables
-# (CT-RATE's labels/metadata CSVs). The other kind -- "folder" -- discovers
-# scans by walking a root directory instead, so it has its own function
-# (build_manifest_folder) rather than sharing this call shape; the script
-# scripts/build_manifest.py picks between them from the source's
-# `manifest_builder` setting in configs/preprocessing.yaml.
-MANIFEST_BUILDERS = {"ctrate": build_manifest_ctrate}
-FOLDER_BUILDER = "folder"
-
-ACQUISITION_COLUMNS = [
-    "rows", "cols", "manufacturer", "model", "kernel",
-    "slice_thickness", "series_description", "contrast", "transfer_syntax",
-]
 
 
 def build_manifest_folder(
@@ -106,28 +97,29 @@ def build_manifest_folder(
     patient_id_source: str = "auto",
 ) -> pd.DataFrame:
     """One row per discovered scan, for any folder of NIfTI files or DICOM
-    series (e.g. the local NHRD data). No labels, and no split assigned here
-    -- both are the caller's job (scripts/build_manifest.py), matching how
-    build_manifest_ctrate works, so the two stay symmetric.
+    series (e.g. the local NHRD data). No labels and no split.
 
-    Identity comes from the relative scan_path plus, when a folder holds more
-    than one series, a short suffix of that series' own tag (never a fake
-    sub-path -- scan_path always stays a literal, directly-openable folder).
+    Identity comes from the relative scan_path plus, for DICOM, a short suffix
+    of that series' own SeriesInstanceUID (never a fake sub-path -- scan_path
+    always stays a literal, directly-openable folder), so a folder holding
+    several series yields several unique rows.
 
     Patients are grouped by folder depth or by the DICOM PatientID tag.
-    ``patient_id_source="auto"`` (the default) decides between them itself,
-    from the SAME per-scan tag reads this function already does for the
-    acquisition columns (no extra file reads): it only switches to tag-based
-    grouping when PatientID is present AND distinct across every DICOM scan
-    found. Real hospital data is routinely anonymised before being shared for
-    research, which strips this tag entirely -- defaulting to the
-    always-safe folder-depth fallback and only upgrading on positive,
-    confirming evidence avoids silently grouping by a tag that turns out to
-    be missing or (worse) accidentally shared between two different real
-    patients. Pass "path" or "dicom_tag" explicitly to force one or the
-    other without the auto-check. For DICOM the acquisition fields are read
-    from the tags (there is no metadata CSV); date and identifying tags are
-    deliberately not recorded.
+    ``patient_id_source="auto"`` decides between them itself, from the SAME
+    per-scan tag reads this function already does for the acquisition columns
+    (no extra file reads): it only switches to tag-based grouping when
+    PatientID is present AND distinct across every DICOM scan found. Real
+    hospital data is routinely anonymised before being shared for research,
+    which strips this tag entirely -- defaulting to the always-safe
+    folder-depth fallback and only upgrading on positive, confirming evidence
+    avoids silently grouping by a tag that turns out to be missing or (worse)
+    accidentally shared between two different real patients. Pass "path" or
+    "dicom_tag" to force one without the auto-check. The choice actually used
+    is recorded in ``manifest.attrs["patient_id_source"]`` so a caller that
+    builds a source in several pieces can keep it consistent across them.
+
+    For DICOM the acquisition fields are read from the tags (there is no
+    metadata CSV); dates and identifying tags are deliberately not recorded.
     """
     root = Path(root)
     rows: list[dict] = []
@@ -181,76 +173,8 @@ def build_manifest_folder(
     dup = manifest[manifest["volume_id"].duplicated(keep=False)]
     if len(dup):
         raise ValueError(f"scan ids are not unique: {dup['scan_path'].tolist()[:6]}")
+    manifest.attrs["patient_id_source"] = resolved_source
     return manifest
-
-
-def build_manifest(
-    volume_ids: list[str],
-    metadata_df: pd.DataFrame | None = None,
-    id_col: str = "VolumeName",
-    builder: str = "ctrate",
-) -> pd.DataFrame:
-    """Entry point: dispatches to MANIFEST_BUILDERS[builder]. No labels are
-    ever read or joined here -- see build_manifest_ctrate's docstring."""
-    if builder not in MANIFEST_BUILDERS:
-        raise ValueError(f"unknown manifest builder {builder!r}; known: {sorted(MANIFEST_BUILDERS)}")
-    return MANIFEST_BUILDERS[builder](volume_ids, metadata_df, id_col)
-
-
-def assign_patient_splits(patient_ids: list[str], val_fraction: float = 0.1, seed: int = 0) -> dict[str, str]:
-    """Split PATIENTS (not volumes) into train/val.
-
-    This only carves a validation set out of CT-RATE's *train* patients.
-    CT-RATE's own valid patients should be kept as the held-out benchmark set
-    (assigned "test" by the caller), never mixed back into train/val.
-    """
-    unique = sorted(set(patient_ids))
-    rng = random.Random(seed)
-    rng.shuffle(unique)
-    n_val = max(1, int(round(len(unique) * val_fraction))) if unique else 0
-    val_patients = set(unique[:n_val])
-    return {p: ("val" if p in val_patients else "train") for p in unique}
-
-
-def assign_splits_by_amount(
-    patient_ids: list[str],
-    n_train: int,
-    n_val: int,
-    n_test: int = 0,
-    seed: int = 0,
-) -> dict[str, str]:
-    """Randomly assign exactly ``n_train``/``n_val``/``n_test`` PATIENTS
-    (not scans) into their groups, by a fixed seed for reproducibility.
-
-    Used for both CT-RATE (called on the official train-source patients,
-    n_test=0, since CT-RATE's official valid-source patients become "test"
-    directly, with no further splitting -- see docs/preprocessing/data_contract.md) and
-    local data (called once on the whole discovered pool, all three amounts
-    together, since local data has no separate official train/valid halves).
-
-    Patients not selected at all are simply left out of the returned dict --
-    e.g. when the three amounts add up to less than the full available pool
-    (a smaller pilot run). Raises if there aren't enough distinct patients to
-    satisfy what was asked for.
-    """
-    unique = sorted(set(patient_ids))
-    total = n_train + n_val + n_test
-    if total > len(unique):
-        raise ValueError(
-            f"asked for {total} patients (train={n_train}, val={n_val}, test={n_test}) "
-            f"but only {len(unique)} distinct patients are available"
-        )
-    rng = random.Random(seed)
-    rng.shuffle(unique)
-    chosen = unique[:total]
-    result: dict[str, str] = {}
-    for pid in chosen[:n_train]:
-        result[pid] = "train"
-    for pid in chosen[n_train : n_train + n_val]:
-        result[pid] = "val"
-    for pid in chosen[n_train + n_val : total]:
-        result[pid] = "test"
-    return result
 
 
 def check_no_patient_overlap(manifest: pd.DataFrame, split_col: str = "split", patient_col: str = "patient_id") -> None:

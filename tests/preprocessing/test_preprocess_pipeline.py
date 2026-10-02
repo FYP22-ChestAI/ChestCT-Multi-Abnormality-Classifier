@@ -4,7 +4,9 @@ import json
 
 import numpy as np
 
-from ct_preprocessing.preprocess import PreprocessConfig, config_fingerprint, is_cache_fresh, preprocess_one
+from ct_preprocessing.preprocess import (
+    PreprocessConfig, config_fingerprint, is_cache_fresh, load_cached_stats, preprocess_one,
+)
 
 
 def test_preprocess_one_produces_the_expected_npy(tmp_path, synthetic_nifti):
@@ -73,3 +75,32 @@ def test_is_cache_fresh_detects_a_stale_cache_after_a_config_change(tmp_path, sy
 
 def test_is_cache_fresh_false_when_nothing_cached(tmp_path):
     assert is_cache_fresh(tmp_path, "never_processed", PreprocessConfig()) is False
+
+
+def test_the_compute_device_does_not_change_the_cache_fingerprint():
+    # CPU and GPU resampling produce the same cache; switching must not look "stale"
+    assert config_fingerprint(PreprocessConfig(device="cpu")) == config_fingerprint(PreprocessConfig(device="cuda"))
+
+
+def test_the_sidecar_records_the_per_volume_stats_for_resuming(tmp_path, synthetic_nifti):
+    path, _, _ = synthetic_nifti
+    cfg = PreprocessConfig(target_size_hw=(64, 64))
+    result = preprocess_one(path, out_dir=tmp_path, cfg=cfg, volume_id="v1")
+    assert result.ok
+
+    stats = load_cached_stats(tmp_path, "v1")
+    assert stats["n_slices"] == result.n_slices
+    assert stats["spacing_z_mm"] == result.spacing_after_resample[0]
+    assert stats["crop_shape"] == "x".join(map(str, result.crop_shape))
+    assert stats["npy_path"] == str(tmp_path / "v1.npy")
+    assert load_cached_stats(tmp_path, "never_processed") is None
+
+
+def test_is_cache_fresh_without_the_raw_file_trusts_the_fingerprint(tmp_path, synthetic_nifti):
+    # after ingest the raw scan is deleted; the cache must still count as fresh
+    path, _, _ = synthetic_nifti
+    cfg = PreprocessConfig(target_size_hw=(64, 64))
+    preprocess_one(path, out_dir=tmp_path, cfg=cfg, volume_id="v1")
+    path.unlink()
+    assert is_cache_fresh(tmp_path, "v1", cfg) is True
+    assert is_cache_fresh(tmp_path, "v1", PreprocessConfig(target_size_hw=(32, 32))) is False
