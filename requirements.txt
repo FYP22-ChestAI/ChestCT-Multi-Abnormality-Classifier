@@ -17,7 +17,7 @@ tqdm>=4.65
 # pylibjpeg-libjpeg
 # pylibjpeg-openjpeg
 
-# Optional: only needed for chestct.data.dataset, which hands tensors to M3/M4.
+# Optional: only needed for ct_preprocessing.data.dataset, which hands tensors to M3/M4.
 # Not required to run the preprocessing pipeline itself.
 # torch>=2.0
 

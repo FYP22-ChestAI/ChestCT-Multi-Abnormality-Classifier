@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "chestct"
+name = "ct-preprocessing"
 version = "0.1.0"
 description = "M1: CT data loading and preprocessing for the ChestAI multi-abnormality classifier"
 requires-python = ">=3.10"
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Needed only by chestct.data.dataset (the PyTorch hand-off to M3/M4). The rest
-# of this package works without torch installed -- see docs/data_contract.md.
+# Needed only by ct_preprocessing.data.dataset (the PyTorch hand-off to M3/M4). The rest
+# of this package works without torch installed -- see docs/preprocessing/data_contract.md.
 torch = ["torch>=2.0"]
 # Needed only if the DICOM files are compressed (JPEG / JPEG 2000).
 dicom-codecs = ["pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg"]

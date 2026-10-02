@@ -1,0 +1,84 @@
+# M1 data contract settings -- see docs/preprocessing/data_contract.md for why these values
+# were chosen. Changing anything under `preprocess` or `windows` changes the
+# .npy cache; a stale cache is detected automatically (see
+# ct_preprocessing.preprocess.is_cache_fresh) and reprocessed rather than reused.
+ 
+paths:
+  raw_dir: data/raw
+  cache_dir: data/cache
+  manifest_path: data/manifest.csv
+  qc_report_path: data/qc_report.csv
+  montage_dir: data/qc_montages
+  preprocessing_manifest_path: data/preprocessing_manifest.json
+
+# Named data sources. Each one is just "a format + a folder" -- a plain
+# filesystem path works identically for a Hugging-Face download that landed
+# locally, a folder on this laptop, or a mounted university server; nothing
+# here needs to know which. `manifest_builder` selects the id-parsing
+# strategy in ct_preprocessing.manifest.MANIFEST_BUILDERS (never labels -- this
+# pipeline doesn't read them, for either source). See
+# scripts/build_manifest.py --source-name and docs/preprocessing/data_contract.md.
+sources:
+  # One CT-RATE source covers both its official TRAIN and VALID pools --
+  # scripts/download_subset.py fetches both into the same raw_dir in one
+  # combined run (--n-train/--n-val from TRAIN, --n-test from VALID), and
+  # build_manifest.py tells them apart itself via each volume id's own
+  # train_/valid_ prefix (source_split), not via separate source entries.
+  ctrate:
+    format: nifti
+    raw_dir: data/raw
+    manifest_builder: ctrate
+    # Pilot-sized defaults -- running `download_subset.py`/`build_manifest.py`
+    # with no --n-train/--n-val/--n-test/--seed at all uses these. Override
+    # on the command line for a real (non-pilot) run.
+    n_train: 4
+    n_val: 1
+    n_test: 1
+    seed: 0
+    max_combined_gb: 1.5
+  # Local hospital data: any folder of DICOM series (or NIfTI files). The folder
+  # is normally given at run time (--raw-dir / --source-root), so raw_dir here is
+  # only a placeholder. Every DICOM series (grouped by SeriesInstanceUID, not
+  # just folder location) or NIfTI file is one scan, whatever the layout
+  # underneath. No labels are read to build the manifest.
+  nhrd_local:
+    format: dicom                 # or "auto" to detect
+    raw_dir: data/raw_nhrd
+    manifest_builder: folder
+    patient_id_source: auto       # decides path vs dicom_tag itself -- see build_manifest_folder
+    patient_path_depth: 1         # NHRD: each top folder (e.g. 4214-26) is one patient
+    n_train: 30
+    n_val: 5
+    n_test: 5
+    seed: 0
+    # qc:                         # per-source overrides of the global `qc:` below
+    #   min_slices: 60
+
+preprocess:
+  target_spacing_zyx: [1.5, 0.75, 0.75]   # mm: [slice thickness, row, col] -- CT-CLIP reference
+  target_size_hw: [224, 224]              # must be a multiple of 14 (DINOv2 ViT-*/14 patch size)
+  crop_margin: 4                          # voxels of padding around the foreground box
+  crop_threshold_hu: -500.0               # above this = "tissue" for the crop mask
+  crop_cc_downsample: 4                   # downsample factor for the connected-component search only (memory safety)
+  resize_mode: stretch                    # "stretch" (independent W,H) or "pad" (aspect-preserving)
+  min_change_ratio: 0.05                  # skip resampling an axis already this close to target
+  device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present (e.g. on Colab)
+  version: m1-v2
+
+qc:
+  min_slices: 80
+  max_slices: 650
+  hu_min_uncalibrated: -500.0             # min ABOVE this = looks like raw, uncalibrated data (the real defect signature)
+  # no hu_max check: a high max (metal, contrast, dense implants -- e.g. CT-RATE's
+  # own "Medical material" label, positive on 12.3% of real volumes) is a normal,
+  # wanted clinical finding, not a defect -- see docs/preprocessing/data_contract.md.
+  min_std: 1.0
+  z_spacing_low: 0.3
+  z_spacing_high: 3.0
+
+# 3 HU windows used as the 3 input channels (AnyMC3D / CT-RATE convention).
+# Applied at load time by the Dataset, NOT baked into the cached .npy.
+windows:
+  lung: [-1000, 400]
+  soft_tissue: [-150, 250]
+  all_tissue: [-1000, 1000]
