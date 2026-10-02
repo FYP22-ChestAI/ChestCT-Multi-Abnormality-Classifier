@@ -1,5 +1,5 @@
 # M1 data contract settings -- see docs/preprocessing/data_contract.md for why these values
-# were chosen. Changing anything under `preprocess` or `windows` changes the
+# were chosen. Changing anything under `preprocess` changes the
 # .npy cache; a stale cache is detected automatically (see
 # ct_preprocessing.preprocess.is_cache_fresh) and reprocessed rather than reused.
  
@@ -75,10 +75,3 @@ qc:
   min_std: 1.0
   z_spacing_low: 0.3
   z_spacing_high: 3.0
-
-# 3 HU windows used as the 3 input channels (AnyMC3D / CT-RATE convention).
-# Applied at load time by the Dataset, NOT baked into the cached .npy.
-windows:
-  lung: [-1000, 400]
-  soft_tissue: [-150, 250]
-  all_tissue: [-1000, 1000]

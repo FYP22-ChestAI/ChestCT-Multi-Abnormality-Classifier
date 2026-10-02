@@ -58,11 +58,11 @@ def test_a_folder_with_two_series_is_a_hard_error(tmp_path, dicom_writer, synthe
 def test_inference_takes_a_dicom_folder(tmp_path, dicom_writer, synthetic_hu):
     folder = tmp_path / "S0001"
     dicom_writer(folder, synthetic_hu, iop=NIFTI_ORIENTATION)
-    [result] = run_inference(folder, cfg=CFG, qc_thresholds=RELAXED, normalize_imagenet=False)
-    assert result.passed and result.pixel_values.shape == (40, 3, 48, 48)
+    [result] = run_inference(folder, cfg=CFG, qc_thresholds=RELAXED)
+    assert result.passed and result.hu.shape == (40, 48, 48)
 
     [rejected] = run_inference(folder, cfg=CFG)  # default thresholds want >= 80 slices
-    assert not rejected.passed and rejected.pixel_values is None
+    assert not rejected.passed and rejected.hu is None
     assert rejected.qc is not None and not rejected.qc.passed
 
 
@@ -75,7 +75,7 @@ def test_inference_batch_continues_past_a_qc_failure(tmp_path, dicom_writer, syn
     assert len(results) == 2
     assert {r.passed for r in results} == {True, False}
     failed = next(r for r in results if not r.passed)
-    assert failed.pixel_values is None and failed.qc is not None
+    assert failed.hu is None and failed.qc is not None
 
 
 # ------------------------------------------------------------ stale-cache guard
@@ -195,7 +195,7 @@ def test_stage_tree_copies_resumes_and_filters(tmp_path, dicom_writer, synthetic
 # ------------------------------------------------------------------- config
 def test_per_source_qc_overrides():
     cfg = DataConfig(
-        paths=PathsConfig(), preprocess=PreprocessConfig(), qc=QCThresholds(min_slices=80), windows={},
+        paths=PathsConfig(), preprocess=PreprocessConfig(), qc=QCThresholds(min_slices=80),
         sources={"local": SourceConfig(qc={"min_slices": 30})},
     )
     assert cfg.qc_for("local").min_slices == 30

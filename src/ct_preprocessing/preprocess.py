@@ -3,9 +3,9 @@ cached, unwindowed .npy.
 
     load (real HU, RAS+)  ->  spacing  ->  crop  ->  resize  ->  save int16 .npy
 
-Windowing is NOT part of this phase -- see windows.py and dataset.py. The
-saved .npy holds raw HU so windows can still change during development
-without re-running this whole (expensive) step.
+Windowing is NOT part of this package at all: the saved .npy holds raw HU, and
+the model code that consumes the cache applies whatever windows it wants, so
+they can change without re-running this whole (expensive) step.
 """
 from __future__ import annotations
 

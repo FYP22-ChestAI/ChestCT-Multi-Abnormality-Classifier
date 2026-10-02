@@ -1,6 +1,6 @@
 """Load configs/preprocessing.yaml into typed config objects used across scripts.
 
-Keeping every tunable number (spacing, size, windows, thresholds, paths) in
+Keeping every tunable number (spacing, size, thresholds, paths) in
 one YAML file -- not scattered through code -- means the whole team agrees on
 one set of settings, and preprocessing_manifest.json can record exactly what
 was used (see docs/preprocessing/data_contract.md).
@@ -14,7 +14,6 @@ import yaml
 
 from .preprocess_config import PreprocessConfig
 from .quality import QCThresholds
-from .windows import DEFAULT_WINDOWS
 
 
 @dataclass
@@ -70,7 +69,6 @@ class DataConfig:
     paths: PathsConfig
     preprocess: PreprocessConfig
     qc: QCThresholds
-    windows: dict[str, tuple[float, float]]
     sources: dict[str, SourceConfig] = field(default_factory=dict)
 
     def qc_for(self, source_name: str | None) -> QCThresholds:
@@ -91,9 +89,6 @@ def load_config(path: str | Path = "configs/preprocessing.yaml") -> DataConfig:
     if "target_size_hw" in pre_raw:
         pre_raw["target_size_hw"] = tuple(pre_raw["target_size_hw"])
 
-    windows_raw = raw.get("windows", DEFAULT_WINDOWS)
-    windows = {k: tuple(v) for k, v in windows_raw.items()}
-
     sources_raw = raw.get("sources", {}) or {}
     sources = {name: SourceConfig(**cfg) for name, cfg in sources_raw.items()}
 
@@ -101,6 +96,5 @@ def load_config(path: str | Path = "configs/preprocessing.yaml") -> DataConfig:
         paths=PathsConfig(**raw.get("paths", {})),
         preprocess=PreprocessConfig(**pre_raw),
         qc=QCThresholds(**raw.get("qc", {})),
-        windows=windows,
         sources=sources,
     )
