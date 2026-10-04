@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "chestct"
-version = "0.1.0"
-description = "M1: CT data loading and preprocessing for the ChestAI multi-abnormality classifier"
+name = "ct-preprocessing"
+version = "0.2.0"
+description = "Chest CT preprocessing: chunked ingest of CT-RATE and local DICOM data into a raw-HU .npy cache for the ChestAI multi-abnormality classifier"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
@@ -15,15 +15,19 @@ dependencies = [
     "pyyaml>=6.0",
     "pydicom>=3.0",
     "matplotlib>=3.7",
+    "huggingface_hub>=0.23",
 ]
 
 [project.optional-dependencies]
-# Needed only by chestct.data.dataset (the PyTorch hand-off to M3/M4). The rest
-# of this package works without torch installed -- see docs/data_contract.md.
+# Only for GPU resampling (preprocess.device: cuda / auto in configs/preprocessing.yaml).
+# Everything else, including the default CPU path, works without torch installed.
 torch = ["torch>=2.0"]
 # Needed only if the DICOM files are compressed (JPEG / JPEG 2000).
 dicom-codecs = ["pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg"]
-dev = ["pytest>=7.0", "tqdm>=4.65"]
+dev = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

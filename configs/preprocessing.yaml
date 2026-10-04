@@ -1,0 +1,92 @@
+# Preprocessing pipeline settings -- see docs/preprocessing/README.md and
+# docs/preprocessing/data_contract.md for why these values were chosen.
+#
+# Every value here is a DEFAULT. Each script takes a command-line argument that
+# overrides it for one run (e.g. `ingest.py --min-free-gb 150`), and prints the
+# settings it actually used as its first line.
+#
+# IMPORTANT: raw scans are deleted after every ingest chunk, so changing
+# anything under `preprocess` AFTER a large ingest means fetching everything
+# again. Settle `preprocess` with a small pilot run first. A stale cache is
+# detected automatically (see ct_preprocessing.preprocess.is_cache_fresh).
+
+paths:
+  raw_dir: data/raw                       # parent of each source's scratch folder
+  cache_dir: data/cache                   # the permanent output: one .npy + .meta.json per volume
+  manifest_path: data/manifest.csv
+  qc_report_path: data/qc_report.csv
+  montage_dir: data/qc_montages
+  preprocessing_manifest_path: data/preprocessing_manifest.json
+  metadata_dir: data/metadata             # CT-RATE metadata CSVs
+  worklist_dir: data/worklists            # make_worklist.py output (CT-RATE)
+  chunk_manifest_dir: data/manifests      # one small manifest per ingested chunk
+  state_dir: data/ingest_state            # .done / .failed markers, so ingest can resume
+  splits_dir: data/splits                 # frozen patient -> split files
+
+# Named data sources. `ingest` holds the defaults for make_worklist.py / ingest.py,
+# `split` the defaults for assign_splits.py. No labels are read for any source.
+sources:
+  # CT-RATE: NIfTI volumes on Hugging Face. Its train_fixed/ pool feeds train+val,
+  # its valid_fixed/ pool is the test set (the official split, kept whole).
+  ctrate:
+    format: nifti
+    raw_dir: data/raw/ctrate              # scratch -- emptied after every chunk
+    manifest_builder: ctrate
+    ingest:
+      chunk_size: 40                      # volumes fetched + preprocessed + cleaned up together
+      train_pool: one_per_scan            # one reconstruction per scan (halves the cache); or "all"
+      test_pool: all                      # the whole valid_fixed pool
+      max_train_patients: null            # cap if the calibration run says the cache will not fit
+      max_test_patients: null             # cap the test pool -- only for small pilot runs
+      max_combined_gb: null               # skip TRAIN volumes needing more resample memory than this
+      seed: 0
+      min_free_gb: 100                    # stop cleanly when free disk drops below this
+      workers: 4                          # parallel preprocessing processes
+      fetch_workers: 4                    # parallel downloads inside one chunk
+      hf_repo: ibrahimhamamci/CT-RATE
+      est_mb_per_volume: 22               # only for the projected-size estimate; use the measured value
+    split:
+      n_val_patients: 1000                # drawn from train-pool patients; test = the valid pool
+      seed: 0
+
+  # Local hospital data (NHRD): DICOM series uploaded as .zip/.tar archives of
+  # whole patient folders (~10 GB each) to a Drive folder the server can read.
+  nhrd_local:
+    format: dicom
+    raw_dir: data/raw/nhrd_local          # scratch -- emptied after every archive
+    manifest_builder: folder
+    patient_id_source: auto               # decides path vs dicom_tag once, from the first archive
+    patient_path_depth: 1                 # NHRD: each top folder (e.g. 4214-26) is one patient
+    ingest:
+      drive_remote: "gdrive:nhrd_raw"     # an rclone remote, or a plain folder path
+      min_free_gb: 100
+      workers: 4
+      est_mb_per_volume: 22
+    split:
+      n_val_patients: 150
+      n_test_patients: 150
+      seed: 0
+    # qc:                                 # per-source overrides of the global `qc:` below
+    #   min_slices: 60
+
+preprocess:
+  target_spacing_zyx: [1.5, 0.75, 0.75]   # mm: [slice thickness, row, col] -- CT-CLIP reference
+  target_size_hw: [224, 224]              # must be a multiple of 14 (DINOv2 ViT-*/14 patch size)
+  crop_margin: 4                          # voxels of padding around the foreground box
+  crop_threshold_hu: -500.0               # above this = "tissue" for the crop mask
+  crop_cc_downsample: 4                   # downsample factor for the connected-component search only (memory safety)
+  resize_mode: stretch                    # "stretch" (independent W,H) or "pad" (aspect-preserving)
+  min_change_ratio: 0.05                  # skip resampling an axis already this close to target
+  device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present
+  version: m1-v2
+
+qc:
+  min_slices: 80
+  max_slices: 650
+  hu_min_uncalibrated: -500.0             # min ABOVE this = looks like raw, uncalibrated data (the real defect signature)
+  # no hu_max check: a high max (metal, contrast, dense implants -- e.g. CT-RATE's
+  # own "Medical material" label, positive on 12.3% of real volumes) is a normal,
+  # wanted clinical finding, not a defect -- see docs/preprocessing/data_contract.md.
+  min_std: 1.0
+  z_spacing_low: 0.3
+  z_spacing_high: 3.0

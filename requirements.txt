@@ -1,4 +1,4 @@
-# Core (needed to build the manifest and run preprocessing/QC)
+# Core (needed to ingest, preprocess and QC)
 numpy>=1.24
 scipy>=1.10
 pandas>=2.0
@@ -7,18 +7,14 @@ pyyaml>=6.0
 pydicom>=3.0
 matplotlib>=3.7
 pillow>=10.0
-
-# Optional: nicer progress bars in scripts/preprocess_all.py (falls back to a
-# plain loop if not installed)
-tqdm>=4.65
+huggingface_hub>=0.23    # CT-RATE downloads (scripts/preprocessing/make_worklist.py, ingest.py)
 
 # Optional: decoders, only needed if the DICOM files are compressed (JPEG / JPEG 2000)
 # pylibjpeg
 # pylibjpeg-libjpeg
 # pylibjpeg-openjpeg
 
-# Optional: only needed for chestct.data.dataset, which hands tensors to M3/M4.
-# Not required to run the preprocessing pipeline itself.
+# Optional: only for GPU resampling (preprocess.device: cuda / auto)
 # torch>=2.0
 
 # Dev

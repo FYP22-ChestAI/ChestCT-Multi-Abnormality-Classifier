@@ -1,5 +1,5 @@
-# ChestAI M1 data -- never commit scans, caches, or anything downloaded from
-# CT-RATE / the local NHRD dataset. See docs/data_contract.md.
+# Pipeline data -- never commit scans, caches, manifests, or anything downloaded from
+# CT-RATE / the local NHRD dataset. See docs/preprocessing/data_contract.md.
 /data/
 
 # Byte-compiled / optimized / DLL files
