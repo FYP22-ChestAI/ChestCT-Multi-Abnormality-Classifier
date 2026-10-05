@@ -31,6 +31,23 @@ def test_the_shipped_config_loads_with_the_documented_defaults():
     assert cfg.paths.cache_dir not in (ctrate.raw_dir, nhrd.raw_dir)
 
 
+def test_the_shipped_preprocess_block_equals_the_built_in_defaults():
+    # run_inference falls back to the YAML, ingest uses it, and a notebook may build a bare PreprocessConfig():
+    # all three must describe the same cache, or the fingerprints (and the cache) diverge silently
+    from ct_preprocessing.preprocess import config_fingerprint
+    from ct_preprocessing.preprocess_config import PreprocessConfig
+
+    shipped = load_config(REPO / "configs" / "preprocessing.yaml").preprocess
+    assert shipped == PreprocessConfig()
+    assert config_fingerprint(shipped) == config_fingerprint(PreprocessConfig())
+    assert shipped.hu_floor == -1024.0 and shipped.version == "m1-v3"
+
+
+def test_the_hu_floor_can_be_switched_off_in_the_yaml(tmp_path):
+    assert load_config(_write(tmp_path, "preprocess:\n  hu_floor: null\n")).preprocess.hu_floor is None
+    assert load_config(_write(tmp_path, "preprocess:\n  hu_floor: -2000\n")).preprocess.hu_floor == -2000.0
+
+
 def test_the_shipped_config_has_no_windowing_settings():
     # windowing belongs to the model code now; the cache is raw HU
     text = (REPO / "configs" / "preprocessing.yaml").read_text(encoding="utf-8")

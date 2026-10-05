@@ -77,8 +77,9 @@ preprocess:
   crop_cc_downsample: 4                   # downsample factor for the connected-component search only (memory safety)
   resize_mode: stretch                    # "stretch" (independent W,H) or "pad" (aspect-preserving)
   min_change_ratio: 0.05                  # skip resampling an axis already this close to target
+  hu_floor: -1024                         # values below this are scanner padding (-8192 on Siemens go.All) -> set to it; null = off
   device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present
-  version: m1-v2
+  version: m1-v3
 
 qc:
   min_slices: 80

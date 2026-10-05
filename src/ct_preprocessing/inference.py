@@ -25,16 +25,23 @@ identically there for training (from the cache) and inference (from here).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from .config import DEFAULT_CONFIG_PATH, DataConfig, load_config
 from .dicom_loader import discover_scans, make_scan_id
 from .loaders import detect_format
 from .pipeline import process_scan
+from .preprocess import config_fingerprint
 from .preprocess_config import PreprocessConfig
 from .quality import QCResult, QCThresholds
+
+
+class ConfigMismatch(ValueError):
+    """The preprocessing settings in use differ from the ones the cache was built with."""
 
 
 @dataclass
@@ -47,6 +54,28 @@ class InferenceResult:
     spacing_zyx: tuple[float, float, float] | None  # mm, after resampling; None unless passed
     qc: QCResult | None  # None only on a hard error (bad/unreadable file)
     error: str | None  # set only on a hard error
+
+
+def check_matches_cache(cfg: PreprocessConfig, data_cfg: DataConfig) -> None:
+    """Raise ConfigMismatch if ``cfg`` is not what built the cache.
+
+    ``merge_manifests.py`` records the cache's settings fingerprint in
+    ``preprocessing_manifest.json``. A model trained on that cache expects
+    inputs prepared exactly that way, so inference with other settings (a
+    different size, spacing, crop or HU floor) would feed it differently
+    prepared images with no error anywhere. No record yet (no cache has
+    been merged on this machine) means nothing to compare, so no check.
+    """
+    record_path = Path(data_cfg.paths.preprocessing_manifest_path)
+    if not record_path.is_file():
+        return
+    recorded = json.loads(record_path.read_text(encoding="utf-8")).get("fingerprint")
+    if recorded and recorded != config_fingerprint(cfg):
+        raise ConfigMismatch(
+            f"the preprocessing settings differ from the ones the cache in {record_path} was built with "
+            f"(fingerprint {config_fingerprint(cfg)} vs {recorded}). Restore the settings in the config, "
+            "re-ingest, or pass check_cache=False if the difference is intended."
+        )
 
 
 def _discover_for_inference(path: Path, fmt: str | None) -> list[tuple[Path, str, str | None]]:
@@ -71,6 +100,8 @@ def run_inference(
     rescale_slope: float | None = None,
     rescale_intercept: float | None = None,
     scan_format: str | None = None,
+    config_path: str | Path = DEFAULT_CONFIG_PATH,
+    check_cache: bool = True,
 ) -> list[InferenceResult]:
     """Turn one request -- one scan, or a folder of several -- into a
     per-scan result list, ready to feed to a model one row at a time.
@@ -79,8 +110,29 @@ def run_inference(
     without its own calibration metadata; a DICOM series always carries its
     own values per slice. ``scan_format`` overrides auto-detection for the
     whole request.
+
+    With no ``cfg``, the settings come from ``config_path`` (by default the
+    same configs/preprocessing.yaml the cache was built with), including its
+    QC thresholds, and are checked against the cache's recorded fingerprint
+    (``check_cache``): a YAML edited after the cache was built raises
+    ConfigMismatch instead of quietly preparing scans differently. The default
+    path is relative to the working directory, like every script's; a service
+    started elsewhere should pass an absolute ``config_path``. A ``cfg`` passed
+    explicitly is used as given and not checked -- call ``check_matches_cache``
+    yourself if that matters.
     """
-    cfg = cfg or PreprocessConfig()
+    if cfg is None:
+        try:
+            data_cfg = load_config(config_path)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"cannot find the preprocessing config {config_path} (run from the repository root, "
+                "or pass config_path= or cfg=)"
+            ) from exc
+        cfg = data_cfg.preprocess
+        qc_thresholds = qc_thresholds or data_cfg.qc
+        if check_cache:
+            check_matches_cache(cfg, data_cfg)
     path = Path(path)
     scans = _discover_for_inference(path, scan_format)
 

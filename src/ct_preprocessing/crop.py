@@ -26,6 +26,23 @@ from scipy.ndimage import label as cc_label
 from .types import Volume
 
 
+def _occupied_range(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(first, last + 1) index of any True voxel along each axis of a non-empty 3-D mask.
+
+    Reduces the mask one axis at a time, so the extra memory is three short
+    1-D vectors. The obvious alternative, ``np.nonzero(mask)``, materialises
+    a (z, y, x) coordinate for EVERY True voxel -- about 50 bytes per voxel,
+    ~2.6 GB for one large chest CT -- to read off six numbers.
+    """
+    lows, highs = [], []
+    for axis in range(mask.ndim):
+        other = tuple(a for a in range(mask.ndim) if a != axis)
+        occupied = np.flatnonzero(mask.any(axis=other))
+        lows.append(occupied[0])
+        highs.append(occupied[-1] + 1)  # exclusive upper bound
+    return np.array(lows), np.array(highs)
+
+
 def foreground_bbox(
     hu: np.ndarray,
     threshold_hu: float = -500.0,
@@ -59,10 +76,8 @@ def foreground_bbox(
             sizes = np.bincount(labeled.ravel())
             sizes[0] = 0  # background label
             largest = int(np.argmax(sizes))
-            coarse_mask = labeled == largest
-            coords = np.array(np.nonzero(coarse_mask))
-            mins = coords.min(axis=1) * step
-            maxs = (coords.max(axis=1) + 1) * step
+            lows, highs = _occupied_range(labeled == largest)
+            mins, maxs = lows * step, highs * step
             box = []
             for axis, (lo, hi) in enumerate(zip(mins, maxs)):
                 lo = max(0, int(lo) - margin)
@@ -72,9 +87,7 @@ def foreground_bbox(
         # n_components <= 1: nothing stray to remove -- fall through to the
         # cheap full-resolution bounding box below, using the original mask.
 
-    coords = np.array(np.nonzero(mask))
-    mins = coords.min(axis=1)
-    maxs = coords.max(axis=1) + 1  # exclusive upper bound
+    mins, maxs = _occupied_range(mask)
 
     box = []
     for axis, (lo, hi) in enumerate(zip(mins, maxs)):

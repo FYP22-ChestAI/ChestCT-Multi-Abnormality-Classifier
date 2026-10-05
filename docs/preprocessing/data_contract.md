@@ -23,7 +23,10 @@ Everything the model code needs is two things, plus a record:
    - Uncompressed, so slices can be read without loading the whole file:
      `np.load(path, mmap_mode="r")[indices]`.
    - Next to it, `{volume_id}.meta.json`: the settings fingerprint, the raw
-     input's signature, and the per-volume stats. Bookkeeping, not an interface.
+     input's signature, the per-volume stats, and a `calibration` record (was a
+     rescale applied, the HU range seen before the floor, whether padding was
+     floored). The raw file is deleted after ingest, so this is the only way to
+     audit afterwards how a volume's HU were obtained. Bookkeeping, not an interface.
 
 2. **`data/manifest.csv`** -- one row per volume:
    - always: `volume_id`, `patient_id`, `scan_path`, `format`, `source_name`,
@@ -81,6 +84,16 @@ x = to_channels(slices)   # then ImageNet mean/std normalisation, if the encoder
 `ct_preprocessing.inference.run_inference` returns the same preprocessed volume
 (`hu`, int16) as the cache holds, so training (from the cache) and inference
 (from `run_inference`) go through identical windowing in the model code.
+
+With no `cfg`, `run_inference` reads its settings and QC thresholds from
+`configs/preprocessing.yaml` -- the file the cache was built with -- and compares
+them with the fingerprint that `merge_manifests.py` recorded in
+`preprocessing_manifest.json`. If the YAML was edited since the cache was built it
+raises `ConfigMismatch` instead of quietly preparing scans differently (pass
+`check_cache=False` only if that is intended). A `cfg` passed explicitly is used as
+given and not checked; call `check_matches_cache(cfg, data_cfg)` to check it. The
+default config path is relative to the working directory, like every script's: a
+service started from another folder should pass an absolute `config_path=`.
 
 ## Architecture: one shared core, two front doors
 
@@ -169,6 +182,8 @@ loss (e.g. asymmetric / class-weighted) by the model code.
 | Decision | Value | Why |
 |---|---|---|
 | Slice size | **224x224** | A multiple of 14 (DINOv2 ViT-*/14 patch size). Every volume must end up the same size because a batch needs identical tensor shapes. |
+| Unusable values | **rejected before the int16 cast** | NaN/Inf would silently become 0 and 40000 would wrap to -25536, with QC still passing. Such a scan fails with a reason and writes no cache. Real high values (metal, ~3000 HU) fit and are kept. Interpolated values are rounded, not truncated. |
+| HU floor | **-1024** (`preprocess.hu_floor`, `null` = off) | Padding outside the circular field of view is -1024 on most scanners but -8192 on Siemens go.All (29% of CT-RATE train volumes). Nothing real is below air, so values under the floor are set to it, before resampling. Lung, bone and metal are untouched. |
 | Cache dtype | int16, uncompressed, unwindowed | Fast partial reads; 6x smaller than windowed float32 channels; windows stay changeable. |
 | Slice axis / order | Axial, head-to-foot (RAS+ z-axis) | Standard; verified visually via QC montages. |
 | Target spacing | **1.5 / 0.75 / 0.75 mm** (z, y, x) | Reference value from the CT-CLIP paper that built CT-RATE. |
@@ -184,9 +199,11 @@ own labels showed "Medical material" (metal implants, contrast, dense hardware)
 positive on 12.3% of real volumes, and a high max is exactly what that finding
 looks like -- a normal clinical finding, not something to flag.
 
-**HU calibration is explicit, not assumed.** CT-RATE scanners legitimately use
-different `RescaleIntercept` values (-1024 *and* -8192 both occur on correctly
-calibrated data). `ct_preprocessing.loader.ensure_calibrated_hu` checks whether a
+**HU calibration is explicit, not assumed.** CT-RATE's train metadata has
+`RescaleSlope` 1 everywhere and a `RescaleIntercept` of either -1024 (Philips and
+older Siemens) or -8192 (all 13,791 Siemens Healthineers SOMATOM go.All volumes,
+29%). The -8192 seen at the edge of those scans is the padding outside the circular
+field of view after correct calibration, not a defect (hence the HU floor above). `ct_preprocessing.loader.ensure_calibrated_hu` checks whether a
 scan looks calibrated (a low percentile comfortably below -500) and, only if not,
 applies that scan's own `RescaleSlope`/`RescaleIntercept` (from the metadata CSV
 for NIfTI; DICOM applies each slice's own). QC flags a minimum *suspiciously near
@@ -196,8 +213,10 @@ for NIfTI; DICOM applies each slice's own). QC flags a minimum *suspiciously nea
 sidecar with a fingerprint of the exact `PreprocessConfig` that produced it, and a
 signature of the raw input. A volume is skipped only if both still match. The
 compute device is deliberately not part of the fingerprint (CPU and GPU produce the
-same cache, and raw data is gone after ingest, so a false "stale" could not even be
-repaired); once the raw file has been deleted, the fingerprint alone decides.
+same cache -- see "GPU-accelerated resampling" -- and raw data is gone after
+ingest, so a false "stale" could not even be repaired); once the raw file has been
+deleted, the fingerprint alone decides. `hu_floor` and the cache `version` are part
+of the fingerprint.
 
 **Downloads must not be stored twice.** `huggingface_hub` keeps every download in a
 cache even after our copy is deleted, which would fill the disk. The CT-RATE
@@ -211,6 +230,17 @@ instead of `scipy` when a GPU exists. Beyond speed, offloading the large
 intermediate array to VRAM is what avoided a real out-of-memory crash on a big
 CT-RATE volume. `cpu` (the default) always works with no GPU and no torch. On a GPU
 use `--workers 1` so several processes do not fight over one device.
+
+The two paths sample on the same grid: scipy's `zoom` reads output sample `i` at
+input position `i*(n_in-1)/(n_out-1)`, and the torch calls use `align_corners=True`,
+which is the same rule. (With torch's default, `False`, the arrays differ by up to
+about a quarter voxel, so a cache built on one device would not match inference on
+the other.) `tests/preprocessing/test_interpolation_parity.py` checks this; its torch
+tests run torch on the CPU, need torch installed, and are skipped without it.
+
+**The crop box is found with per-axis reductions.** `mask.any(axis=...)` per axis,
+not `np.nonzero(mask)`, which builds a (z, y, x) coordinate for every foreground
+voxel (~50 bytes each, ~2.6 GB for one large chest CT). The box is identical.
 
 ## Q&A worth keeping
 
