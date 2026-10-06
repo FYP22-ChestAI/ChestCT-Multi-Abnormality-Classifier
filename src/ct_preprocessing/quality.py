@@ -7,9 +7,12 @@ part, motion blur) -- that's what the montage image is for.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
+
+INT16_MIN, INT16_MAX = -32768, 32767
 
 
 @dataclass
@@ -36,6 +39,34 @@ class QCResult:
     stats: dict = field(default_factory=dict)
 
 
+def nonfinite_problem(arr: np.ndarray) -> str | None:
+    """Why ``arr`` has unusable values (NaN or +/-Inf), or None. One pass, no temporary mask:
+    a NaN or an Inf in the array always shows up in its min or max."""
+    if arr.size == 0:
+        return "empty volume"
+    vmin, vmax = float(arr.min()), float(arr.max())
+    if not (math.isfinite(vmin) and math.isfinite(vmax)):
+        return "contains NaN or infinite values"
+    return None
+
+
+def int16_problem(arr: np.ndarray) -> str | None:
+    """Why ``arr`` cannot be stored as int16 Hounsfield Units, or None if it can.
+
+    The cache stores int16. Casting a NaN or Inf gives a silent 0, and casting
+    40000 gives -25536, so both are rejected BEFORE the cast instead of being
+    stored as plausible-looking values that QC then passes. Real high values
+    (metal and implants reach about 3000 HU) fit and are kept.
+    """
+    problem = nonfinite_problem(arr)
+    if problem:
+        return problem
+    vmin, vmax = float(arr.min()), float(arr.max())
+    if vmin < INT16_MIN or vmax > INT16_MAX:
+        return f"HU values {vmin:.0f}..{vmax:.0f} do not fit in int16 ({INT16_MIN}..{INT16_MAX}) -- corrupt or mis-scaled data"
+    return None
+
+
 def check_volume(
     volume_id: str,
     npy_array: np.ndarray,
@@ -46,15 +77,25 @@ def check_volume(
     reasons: list[str] = []
     flags: list[str] = []
 
+    if npy_array.ndim != 3 or 0 in npy_array.shape:
+        nan = float("nan")
+        return QCResult(
+            volume_id=volume_id,
+            passed=False,
+            reasons=[f"expected a non-empty (N, H, W) array, got shape {tuple(npy_array.shape)}"],
+            stats={"n_slices": int(npy_array.shape[0]) if npy_array.ndim else 0, "hu_min": nan, "hu_max": nan, "hu_std": nan},
+        )
+
     n = npy_array.shape[0]
     if n < t.min_slices or n > t.max_slices:
         reasons.append(f"slice count {n} outside [{t.min_slices}, {t.max_slices}]")
 
-    has_nan = bool(np.isnan(npy_array).any()) if np.issubdtype(npy_array.dtype, np.floating) else False
-    if has_nan:
-        reasons.append("contains NaN")
+    # Integer arrays (the cache) cannot hold NaN/Inf; only a float array needs the check.
+    has_nonfinite = np.issubdtype(npy_array.dtype, np.floating) and nonfinite_problem(npy_array) is not None
+    if has_nonfinite:
+        reasons.append("contains NaN or infinite values")
 
-    finite = npy_array[np.isfinite(npy_array)] if has_nan else npy_array
+    finite = npy_array[np.isfinite(npy_array)] if has_nonfinite else npy_array
     if finite.size == 0:
         reasons.append("no finite values")
         vmin = vmax = vstd = float("nan")
@@ -67,7 +108,7 @@ def check_volume(
         if vstd < t.min_std:
             reasons.append(f"near-constant volume (std={vstd:.3f})")
 
-    if spacing is None or any(s is None or (isinstance(s, float) and np.isnan(s)) or s <= 0 for s in spacing):
+    if spacing is None or any(s is None or not np.isfinite(s) or s <= 0 for s in spacing):
         reasons.append(f"missing/invalid spacing: {spacing}")
     elif spacing[0] > t.z_spacing_high or spacing[0] < t.z_spacing_low:
         flags.append(f"unusual z-spacing: {spacing[0]:.2f} mm")

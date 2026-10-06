@@ -122,6 +122,9 @@ def preprocess_one(
                 "version": cfg.version,
                 # the raw input's identity, so a later run notices if the RAW data changed
                 "source_signature": source_signature(scan_path, scan_format, series_uid=series_uid),
+                # how the HU were obtained (rescale applied or not, percentiles, raw range, floor): the raw file is
+                # deleted after ingest, so this is the only record to audit a volume's calibration afterwards
+                "calibration": result.calibration,
                 # geometry facts only the loader can know; qc_report.py re-applies them
                 "loader_checks": {
                     k: result.meta[k] for k in ("z_uniform", "slice_axis_tilt_deg") if result.meta and k in result.meta

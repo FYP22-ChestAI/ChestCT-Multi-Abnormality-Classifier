@@ -10,7 +10,9 @@ process_scan() never decides what to do about a QC failure -- it always
 returns the processed array plus the QCResult, and leaves that decision to
 the caller. Training keeps saving every volume and lets qc_report.py
 exclude failures later; the inference caller checks `result.qc.passed`
-itself and refuses to proceed to the model on failure.
+itself and refuses to proceed to the model on failure. Data that cannot be
+stored at all (NaN/Inf, or HU outside the int16 range) is not a QC question:
+it is a hard error, with no array returned.
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ from .crop import crop_to_foreground
 from .loader import ensure_calibrated_hu
 from .loaders import load_volume
 from .preprocess_config import PreprocessConfig
-from .quality import QCResult, QCThresholds, check_volume
+from .quality import QCResult, QCThresholds, check_volume, int16_problem, nonfinite_problem
 from .resize import resize_slices
 from .spacing import resample_to_spacing
 from .types import Volume
@@ -59,6 +61,28 @@ def apply_loader_checks(qc: QCResult, meta: dict) -> None:
         qc.flags.append(f"slice axis tilted {tilt:.1f} deg from the slice normal (gantry tilt?)")
 
 
+def _floor_padding(hu: np.ndarray, floor: float | None, calibration: dict) -> np.ndarray:
+    """Set every value below ``floor`` to ``floor`` and record what was there.
+
+    Scanner padding outside the circular field of view reads -1024 on most
+    scanners but -8192 on Siemens go.All (RescaleIntercept -8192). Nothing
+    real is below air, so flooring makes the cache uniform; lungs, bone and
+    metal are untouched. Done before resampling so the interpolation never
+    blends -8192 into the edge of the body. The raw HU range seen is stored
+    in the calibration record, since the raw file is deleted after ingest.
+    """
+    vmin, vmax = float(hu.min()), float(hu.max())
+    calibration["hu_range_before_floor"] = [vmin, vmax]
+    calibration["hu_floor"] = floor
+    calibration["floored"] = bool(floor is not None and vmin < floor)
+    if not calibration["floored"]:
+        return hu
+    if hu.flags.writeable:
+        np.maximum(hu, floor, out=hu)  # in place: a second copy of a large volume is real memory
+        return hu
+    return np.maximum(hu, floor)
+
+
 def process_scan(
     scan_path: str | Path,
     cfg: PreprocessConfig,
@@ -86,7 +110,12 @@ def process_scan(
         volume = load_volume(scan_path, fmt=scan_format, volume_id=vid, series_uid=series_uid)
         loader_meta = dict(volume.meta)
 
+        problem = nonfinite_problem(volume.hu)  # a NaN would spread through the interpolation below
+        if problem:
+            return ScanResult(volume_id=vid, hu=None, qc=None, error=problem)
+
         hu, calib = ensure_calibrated_hu(volume.hu, rescale_slope, rescale_intercept)
+        hu = _floor_padding(hu, cfg.hu_floor, calib)
         volume = Volume(hu=hu, spacing=volume.spacing, orientation=volume.orientation, meta=volume.meta)
 
         volume = resample_to_spacing(volume, cfg.target_spacing_zyx, cfg.min_change_ratio, device=cfg.device)
@@ -98,6 +127,10 @@ def process_scan(
         crop_shape = tuple(volume.hu.shape)
 
         resized = resize_slices(volume.hu, cfg.target_size_hw, mode=cfg.resize_mode, device=cfg.device)
+        resized = np.rint(resized)  # astype() would truncate toward zero (40.9 -> 40, -0.9 -> 0)
+        problem = int16_problem(resized)
+        if problem:  # never cast first: NaN/Inf become 0 and 40000 wraps to -25536, and QC would pass both
+            return ScanResult(volume_id=vid, hu=None, qc=None, error=problem)
         out = resized.astype(np.int16)
 
         qc = check_volume(vid, out, spacing_after_resample, qc_thresholds)

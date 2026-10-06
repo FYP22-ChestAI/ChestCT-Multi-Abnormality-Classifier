@@ -17,5 +17,14 @@ class PreprocessConfig:
     crop_cc_downsample: int = 4  # downsample factor used only for the connected-component search (memory safety)
     resize_mode: str = "stretch"
     min_change_ratio: float = 0.05
+    # Nothing physical reads below air (-1000 HU); lower values are scanner padding (e.g. -8192 outside the
+    # circular field of view on Siemens go.All, whose RescaleIntercept is -8192). Flooring them keeps the cache
+    # uniform across scanners. None disables it.
+    hu_floor: float | None = -1024.0
     device: str = "cpu"  # "cpu", "cuda", or "auto" (use GPU resampling/resizing if a GPU is available)
-    version: str = "m1-v2"
+    version: str = "m1-v3"
+
+    def __post_init__(self) -> None:
+        # `-1024` and `-1024.0` must hash to the same cache fingerprint, whichever way the YAML spells it
+        if self.hu_floor is not None:
+            self.hu_floor = float(self.hu_floor)

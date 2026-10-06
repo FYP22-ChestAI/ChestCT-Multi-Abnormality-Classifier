@@ -15,6 +15,7 @@ from ct_preprocessing.ingest.engine import (
 from ct_preprocessing.manifest import build_manifest_ctrate
 from ct_preprocessing.preprocess import PreprocessConfig, preprocess_one
 from ct_preprocessing.quality import QCThresholds
+from ct_preprocessing.runs import Run
 
 CHUNKS = {"0000": ["train_1_a_1", "train_2_a_1"], "0001": ["train_3_a_1"], "0002": ["train_4_a_1"]}
 
@@ -58,9 +59,8 @@ def nifti(synthetic_nifti):
 def make_cfg(tmp_path, builder="ctrate"):
     d = tmp_path / "data"
     paths = PathsConfig(
-        raw_dir=str(d / "raw"), cache_dir=str(d / "cache"), manifest_path=str(d / "manifest.csv"),
-        chunk_manifest_dir=str(d / "manifests"), state_dir=str(d / "state"), splits_dir=str(d / "splits"),
-        worklist_dir=str(d / "worklists"), metadata_dir=str(d / "metadata"),
+        raw_dir=str(d / "raw"), cache_dir=str(d / "cache"), runs_dir=str(d / "runs"),
+        state_dir=str(d / "state"), splits_dir=str(d / "splits"), metadata_dir=str(d / "metadata"),
     )
     src = SourceConfig(format="nifti", manifest_builder=builder, raw_dir=str(d / "raw" / "ctrate"))
     return DataConfig(
@@ -72,9 +72,13 @@ def make_cfg(tmp_path, builder="ctrate"):
 OPTS = dict(min_free_gb=0, workers=1)
 
 
+def RUN(cfg, name="main", source="ctrate"):
+    return Run(cfg.paths, source, name)
+
+
 def run(cfg, fetcher, **kw):
     logs: list[str] = []
-    summary = run_ingest("ctrate", cfg, fetcher, IngestOptions(**{**OPTS, **kw}), log=logs.append)
+    summary = run_ingest(RUN(cfg), cfg, fetcher, IngestOptions(**{**OPTS, **kw}), log=logs.append)
     return summary, logs
 
 
@@ -90,14 +94,14 @@ def test_every_chunk_is_ingested_into_the_cache_and_the_raw_data_is_deleted(tmp_
         assert (cache / f"{v}.meta.json").exists()
     scratch = tmp_path / "data" / "raw" / "ctrate"
     assert [p.name for p in scratch.iterdir()] == [state.SCRATCH_SENTINEL]  # raw never accumulates
-    assert set(state.done_chunks(cfg.paths, "ctrate")) == set(CHUNKS)
+    assert set(state.done_chunks(RUN(cfg))) == set(CHUNKS)
     assert any("chunk 0000" in line for line in logs)
 
 
 def test_chunk_manifests_carry_the_stats_and_no_split(tmp_path, nifti):
     cfg = make_cfg(tmp_path)
     run(cfg, FakeFetcher(nifti))
-    rows = pd.read_csv(state.chunk_manifest_path(cfg.paths, "ctrate", "0000"), dtype={"ingest_chunk": str})
+    rows = pd.read_csv(RUN(cfg).chunk_manifest_path("0000"), dtype={"ingest_chunk": str})
     assert rows.volume_id.tolist() == ["train_1_a_1", "train_2_a_1"]
     assert {"n_slices", "npy_path", "spacing_z_mm", "crop_shape", "qc_passed", "source_name", "ingest_chunk"} <= set(rows.columns)
     assert "split" not in rows.columns
@@ -123,13 +127,13 @@ def test_max_chunks_stops_early_and_the_next_run_continues(tmp_path, nifti):
 def test_a_half_finished_chunk_resumes_without_refetching_what_is_already_cached(tmp_path, nifti):
     cfg = make_cfg(tmp_path)
     run(cfg, FakeFetcher(nifti), only_chunk="0000")
-    state.clear_done(cfg.paths, "ctrate", "0000")  # simulate a crash right before the marker was written
+    state.clear_done(RUN(cfg), "0000")  # simulate a crash right before the marker was written
 
     fetcher = FakeFetcher(nifti)
     run(cfg, fetcher, only_chunk="0000")
 
     assert fetcher.downloaded == []  # both volumes were already cached
-    rows = pd.read_csv(state.chunk_manifest_path(cfg.paths, "ctrate", "0000"))
+    rows = pd.read_csv(RUN(cfg).chunk_manifest_path("0000"))
     assert rows.n_slices.notna().all()  # the stats were rebuilt from the cache sidecars, not lost
 
 
@@ -143,14 +147,14 @@ def test_a_corrupt_volume_is_recorded_without_failing_the_chunk_and_can_be_retri
     cfg = make_cfg(tmp_path)
     summary, _ = run(cfg, FakeFetcher(nifti, corrupt={"train_2_a_1"}))
     assert (summary.chunks_done, summary.volumes_ok, summary.volumes_failed) == (3, 3, 1)
-    info = state.done_chunks(cfg.paths, "ctrate")["0000"]
+    info = state.done_chunks(RUN(cfg))["0000"]
     assert info["n_failed"] == 1 and list(info["failed"]) == ["train_2_a_1"]
     assert not (tmp_path / "data" / "cache" / "train_2_a_1.npy").exists()
 
     fixed = FakeFetcher(nifti)  # the file is fine this time
     run(cfg, fixed, retry_failed=True)
     assert fixed.downloaded == ["train_2_a_1"]  # only the failed volume is fetched again
-    assert state.done_chunks(cfg.paths, "ctrate")["0000"]["n_failed"] == 0
+    assert state.done_chunks(RUN(cfg))["0000"]["n_failed"] == 0
     assert (tmp_path / "data" / "cache" / "train_2_a_1.npy").exists()
 
 
@@ -158,13 +162,13 @@ def test_a_failed_chunk_gets_a_failed_marker_and_is_retried_on_the_next_run(tmp_
     cfg = make_cfg(tmp_path)
     summary, _ = run(cfg, FakeFetcher(nifti, fail_chunks={"0001"}))
     assert summary.chunks_done == 2 and summary.chunks_failed == 1
-    assert state.failed_chunks(cfg.paths, "ctrate")["0001"]["attempts"] == 1
+    assert state.failed_chunks(RUN(cfg))["0001"]["attempts"] == 1
 
     run(cfg, FakeFetcher(nifti, fail_chunks={"0001"}))
-    assert state.failed_chunks(cfg.paths, "ctrate")["0001"]["attempts"] == 2
+    assert state.failed_chunks(RUN(cfg))["0001"]["attempts"] == 2
 
     summary, _ = run(cfg, FakeFetcher(nifti))
-    assert summary.chunks_done == 1 and state.failed_chunks(cfg.paths, "ctrate") == {}
+    assert summary.chunks_done == 1 and state.failed_chunks(RUN(cfg)) == {}
 
 
 def test_repeated_failures_stop_the_run_instead_of_grinding_through_every_chunk(tmp_path, nifti):
@@ -179,7 +183,7 @@ def test_an_unexpected_bug_in_one_chunk_does_not_end_an_unattended_run(tmp_path,
     cfg = make_cfg(tmp_path)
     summary, logs = run(cfg, FakeFetcher(nifti, break_rows={"0001"}))
     assert summary.chunks_done == 2 and summary.chunks_failed == 1
-    assert "ZeroDivisionError" in state.failed_chunks(cfg.paths, "ctrate")["0001"]["error"]
+    assert "ZeroDivisionError" in state.failed_chunks(RUN(cfg))["0001"]["error"]
 
 
 def test_a_scratch_folder_with_foreign_files_is_refused_and_nothing_is_deleted(tmp_path, nifti):
@@ -216,7 +220,7 @@ def test_an_unknown_chunk_is_rejected(tmp_path, nifti):
 def test_the_status_report_shows_progress_and_the_measured_cache_size(tmp_path, nifti):
     cfg, fetcher = make_cfg(tmp_path), FakeFetcher(nifti)
     run(cfg, fetcher, max_chunks=2)
-    text = ingest_status("ctrate", cfg, fetcher)
+    text = ingest_status(RUN(cfg), cfg, fetcher)
     assert "chunks done: 2 / 3" in text and "volumes ok: 3" in text and "MB/volume" in text
 
 
@@ -318,7 +322,7 @@ def test_a_second_ingest_on_the_same_source_is_refused_and_touches_nothing(tmp_p
     from ct_preprocessing.ingest.lock import AlreadyRunning, SourceLock
 
     cfg = make_cfg(tmp_path)
-    with SourceLock(state.state_dir(cfg.paths, "ctrate") / "ingest.lock", "ctrate"):
+    with SourceLock(state.source_state_dir(cfg.paths, "ctrate") / "ingest.lock", "ctrate"):
         with pytest.raises(AlreadyRunning, match="already running"):
             run(cfg, FakeFetcher(nifti))
     assert not (tmp_path / "data" / "cache").exists()  # the refused run did nothing
@@ -336,8 +340,8 @@ def test_different_sources_do_not_block_each_other(tmp_path):
     from ct_preprocessing.ingest.lock import SourceLock
 
     paths = make_cfg(tmp_path).paths
-    with SourceLock(state.state_dir(paths, "ctrate") / "ingest.lock", "ctrate"):
-        with SourceLock(state.state_dir(paths, "nhrd_local") / "ingest.lock", "nhrd_local"):
+    with SourceLock(state.source_state_dir(paths, "ctrate") / "ingest.lock", "ctrate"):
+        with SourceLock(state.source_state_dir(paths, "nhrd_local") / "ingest.lock", "nhrd_local"):
             pass
 
 
@@ -345,5 +349,5 @@ def test_a_dry_run_with_retry_failed_does_not_clear_any_marker(tmp_path, nifti):
     cfg = make_cfg(tmp_path)
     run(cfg, FakeFetcher(nifti, corrupt={"train_2_a_1"}))
     summary, logs = run(cfg, FakeFetcher(nifti), dry_run=True, retry_failed=True)
-    assert "0000" in state.done_chunks(cfg.paths, "ctrate")  # still marked done
+    assert "0000" in state.done_chunks(RUN(cfg))  # still marked done
     assert summary.pending_after == 1 and any("would ingest chunk 0000" in line for line in logs)

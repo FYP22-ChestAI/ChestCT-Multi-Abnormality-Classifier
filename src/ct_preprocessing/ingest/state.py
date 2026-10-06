@@ -1,14 +1,17 @@
 """Where ingest keeps its bookkeeping, and the marker files that make it resumable.
 
-Everything lives under the configured ``paths`` (never hard-coded), one
-folder per source, so CT-RATE and NHRD never touch each other's state:
+Per RUN (see ct_preprocessing.runs; ``run.dir`` is data/runs/<source>/<run name>/):
 
-    <worklist_dir>/<source>.csv               what to fetch (CT-RATE only)
-    <chunk_manifest_dir>/<source>/chunk_<id>.csv   manifest rows of one chunk
-    <state_dir>/<source>/chunk_<id>.done      finished chunk (JSON summary)
-    <state_dir>/<source>/chunk_<id>.failed    chunk that could not be processed
-    <state_dir>/<source>/patient_id_source.txt   sticky "auto" decision (NHRD)
-    <splits_dir>/<source>.csv                 frozen patient -> split
+    <run>/worklist.csv                       what to fetch (CT-RATE)
+    <run>/chunk_manifests/chunk_<id>.csv     manifest rows of one chunk
+    <run>/state/chunk_<id>.done              finished chunk (JSON summary)
+    <run>/state/chunk_<id>.failed            chunk that could not be processed
+
+Per SOURCE (shared by all of its runs, because they share one scratch folder and one cache):
+
+    <state_dir>/<source>/ingest.lock           one ingest per source at a time
+    <state_dir>/<source>/patient_id_source.txt sticky "auto" decision (NHRD)
+    <splits_dir>/<source>.csv                  frozen patient -> split
 
 Markers are written atomically (temp file + rename), so a crash can never
 leave a half-written marker that makes a chunk look finished when it is not.
@@ -20,6 +23,7 @@ import os
 from pathlib import Path
 
 from ..config import PathsConfig
+from ..runs import Run
 
 
 def chunk_label(chunk) -> str:
@@ -35,82 +39,70 @@ def write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def worklist_path(paths: PathsConfig, source: str) -> Path:
-    return Path(paths.worklist_dir) / f"{source}.csv"
-
-
 def splits_path(paths: PathsConfig, source: str) -> Path:
     return Path(paths.splits_dir) / f"{source}.csv"
 
 
-def chunk_manifest_dir(paths: PathsConfig, source: str) -> Path:
-    return Path(paths.chunk_manifest_dir) / source
-
-
-def chunk_manifest_path(paths: PathsConfig, source: str, chunk_id: str) -> Path:
-    return chunk_manifest_dir(paths, source) / f"chunk_{chunk_id}.csv"
-
-
-def state_dir(paths: PathsConfig, source: str) -> Path:
+def source_state_dir(paths: PathsConfig, source: str) -> Path:
     return Path(paths.state_dir) / source
 
 
-def _marker(paths: PathsConfig, source: str, chunk_id: str, kind: str) -> Path:
-    return state_dir(paths, source) / f"chunk_{chunk_id}.{kind}"
+def _marker(run: Run, chunk_id: str, kind: str) -> Path:
+    return run.state_dir / f"chunk_{chunk_id}.{kind}"
 
 
-def write_done(paths: PathsConfig, source: str, chunk_id: str, info: dict) -> None:
-    write_atomic(_marker(paths, source, chunk_id, "done"), json.dumps(info, indent=1, default=str))
-    _marker(paths, source, chunk_id, "failed").unlink(missing_ok=True)
+def write_done(run: Run, chunk_id: str, info: dict) -> None:
+    write_atomic(_marker(run, chunk_id, "done"), json.dumps(info, indent=1, default=str))
+    _marker(run, chunk_id, "failed").unlink(missing_ok=True)
 
 
-def write_failed(paths: PathsConfig, source: str, chunk_id: str, error: str) -> None:
-    attempts = (read_marker(paths, source, chunk_id, "failed") or {}).get("attempts", 0) + 1
+def write_failed(run: Run, chunk_id: str, error: str) -> None:
+    attempts = (read_marker(run, chunk_id, "failed") or {}).get("attempts", 0) + 1
     write_atomic(
-        _marker(paths, source, chunk_id, "failed"),
+        _marker(run, chunk_id, "failed"),
         json.dumps({"error": error, "attempts": attempts}, indent=1),
     )
 
 
-def read_marker(paths: PathsConfig, source: str, chunk_id: str, kind: str) -> dict | None:
+def read_marker(run: Run, chunk_id: str, kind: str) -> dict | None:
     try:
-        return json.loads(_marker(paths, source, chunk_id, kind).read_text(encoding="utf-8"))
+        return json.loads(_marker(run, chunk_id, kind).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def clear_done(paths: PathsConfig, source: str, chunk_id: str) -> None:
-    _marker(paths, source, chunk_id, "done").unlink(missing_ok=True)
+def clear_done(run: Run, chunk_id: str) -> None:
+    _marker(run, chunk_id, "done").unlink(missing_ok=True)
 
 
-def _chunks_with(paths: PathsConfig, source: str, kind: str) -> dict[str, dict]:
+def _chunks_with(run: Run, kind: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
-    folder = state_dir(paths, source)
+    folder = run.state_dir
     if folder.is_dir():
         for p in sorted(folder.glob(f"chunk_*.{kind}")):
             chunk_id = p.name[len("chunk_") : -len(f".{kind}")]
-            out[chunk_id] = read_marker(paths, source, chunk_id, kind) or {}
+            out[chunk_id] = read_marker(run, chunk_id, kind) or {}
     return out
 
 
-def done_chunks(paths: PathsConfig, source: str) -> dict[str, dict]:
-    return _chunks_with(paths, source, "done")
+def done_chunks(run: Run) -> dict[str, dict]:
+    return _chunks_with(run, "done")
 
 
-def failed_chunks(paths: PathsConfig, source: str) -> dict[str, dict]:
-    return _chunks_with(paths, source, "failed")
+def failed_chunks(run: Run) -> dict[str, dict]:
+    return _chunks_with(run, "failed")
 
 
 def read_patient_id_source(paths: PathsConfig, source: str) -> str | None:
     try:
-        value = (state_dir(paths, source) / "patient_id_source.txt").read_text(encoding="utf-8").strip()
+        value = (source_state_dir(paths, source) / "patient_id_source.txt").read_text(encoding="utf-8").strip()
     except OSError:
         return None
     return value or None
 
 
 def write_patient_id_source(paths: PathsConfig, source: str, value: str) -> None:
-    write_atomic(state_dir(paths, source) / "patient_id_source.txt", value + "\n")
+    write_atomic(source_state_dir(paths, source) / "patient_id_source.txt", value + "\n")
 
 
 # --------------------------------------------------------------------- scratch safety

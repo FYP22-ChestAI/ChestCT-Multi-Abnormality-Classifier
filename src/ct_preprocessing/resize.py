@@ -15,18 +15,20 @@ from scipy.ndimage import zoom
 from .device import resolve_device
 
 
-def _resize_gpu(hu: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
-    """Bilinear resize on the GPU via torch, treating the slice axis as a
-    batch dimension. Same rationale as spacing.py's GPU path: faster, and
-    keeps the large array off system RAM."""
+def _resize_gpu(hu: np.ndarray, target_h: int, target_w: int, device: str = "cuda") -> np.ndarray:
+    """Bilinear resize with torch, treating the slice axis as a batch dimension.
+    Same rationale as spacing.py's GPU path: faster, and keeps the large array
+    off system RAM. ``align_corners=True`` matches scipy's ``zoom`` (see
+    spacing.py), so the CPU and GPU paths give the same array."""
     import torch
     import torch.nn.functional as F
 
-    t = torch.from_numpy(np.ascontiguousarray(hu)).to("cuda", dtype=torch.float32)[None]  # (1, Z, H, W)
-    t = F.interpolate(t, size=(target_h, target_w), mode="bilinear", align_corners=False)
+    t = torch.from_numpy(np.ascontiguousarray(hu)).to(device, dtype=torch.float32)[None]  # (1, Z, H, W)
+    t = F.interpolate(t, size=(target_h, target_w), mode="bilinear", align_corners=True)
     out = t[0].to("cpu").numpy()
     del t
-    torch.cuda.empty_cache()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     return out
 
 

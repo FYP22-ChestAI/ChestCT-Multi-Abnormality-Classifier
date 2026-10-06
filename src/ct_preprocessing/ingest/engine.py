@@ -25,10 +25,12 @@ from typing import Callable
 
 import pandas as pd
 
+from ..cache_record import ensure_cache_matches
 from ..config import DataConfig
 from ..manifest import FOLDER_BUILDER
 from ..preprocess import PreprocessConfig, is_cache_fresh, load_cached_stats, preprocess_one
 from ..quality import QCThresholds
+from ..runs import Run, list_runs
 from . import state
 from .base import FetchError, Fetcher
 from .lock import SourceLock
@@ -43,6 +45,7 @@ class IngestOptions:
     min_free_gb: float = 100.0
     workers: int = 4
     max_consecutive_failures: int = 3
+    allow_new_settings: bool = False  # let new preprocessing settings replace the cache's recorded ones (old volumes go stale)
 
 
 @dataclass
@@ -176,29 +179,32 @@ def resolve_patient_id_source(paths, source_name: str, configured: str) -> str:
 
 # --------------------------------------------------------------------------- loop
 def run_ingest(
-    source_name: str,
+    run: Run,
     cfg: DataConfig,
     fetcher: Fetcher,
     options: IngestOptions,
     *,
     log: Callable[[str], None] = print,
 ) -> IngestSummary:
-    """Ingest every pending chunk of ``source_name``. One run per source at a time
-    (see lock.py); a dry run only reports and needs no lock."""
+    """Ingest every pending chunk of ``run``. One ingest per SOURCE at a time (all of a source's runs
+    share its scratch folder; see lock.py); a dry run only reports and needs no lock. The cache is
+    shared by every run, so volumes another run already cached are not fetched again."""
     if options.dry_run:
-        return _ingest(source_name, cfg, fetcher, options, log=log)
-    with SourceLock(state.state_dir(cfg.paths, source_name) / "ingest.lock", source_name):
-        return _ingest(source_name, cfg, fetcher, options, log=log)
+        return _ingest(run, cfg, fetcher, options, log=log)
+    with SourceLock(state.source_state_dir(cfg.paths, run.source) / "ingest.lock", run.source):
+        ensure_cache_matches(cfg.paths.cache_dir, cfg.preprocess, allow_new_settings=options.allow_new_settings)
+        return _ingest(run, cfg, fetcher, options, log=log)
 
 
 def _ingest(
-    source_name: str,
+    run: Run,
     cfg: DataConfig,
     fetcher: Fetcher,
     options: IngestOptions,
     *,
     log: Callable[[str], None] = print,
 ) -> IngestSummary:
+    source_name = run.source
     source_cfg = cfg.source(source_name)
     paths = cfg.paths
     raw_dir, cache_dir = Path(source_cfg.raw_dir), Path(paths.cache_dir)
@@ -206,12 +212,12 @@ def _ingest(
     summary = IngestSummary()
     t_start = time.time()
 
-    done = state.done_chunks(paths, source_name)
+    done = state.done_chunks(run)
     if options.retry_failed:
         with_failures = [c for c, info in done.items() if info.get("n_failed", 0) > 0]
         if not options.dry_run:
             for chunk_id in with_failures:
-                state.clear_done(paths, source_name, chunk_id)
+                state.clear_done(run, chunk_id)
         done = {c: i for c, i in done.items() if c not in with_failures}
 
     all_chunks = fetcher.chunk_ids()
@@ -220,7 +226,7 @@ def _ingest(
         if options.only_chunk not in all_chunks:
             raise ValueError(f"chunk {options.only_chunk!r} is not one of this source's chunks")
         pending = [c for c in pending if c == options.only_chunk]
-    log(f"[{source_name}] {len(pending)} chunk(s) pending of {len(all_chunks)} ({len(done)} already done)")
+    log(f"[{source_name}/{run.name}] {len(pending)} chunk(s) pending of {len(all_chunks)} ({len(done)} already done)")
     if options.dry_run:
         for c in pending[: (options.max_chunks or len(pending))]:
             log(f"  would ingest chunk {c}")
@@ -259,10 +265,10 @@ def _ingest(
             rows = rows.assign(source_name=source_name, ingest_chunk=chunk_id)
             if not result.stats.empty:
                 rows = rows.merge(result.stats, on="volume_id", how="left")
-            manifest_file = state.chunk_manifest_path(paths, source_name, chunk_id)
+            manifest_file = run.chunk_manifest_path(chunk_id)
             manifest_file.parent.mkdir(parents=True, exist_ok=True)
             rows.to_csv(manifest_file, index=False)
-            state.write_done(paths, source_name, chunk_id, {
+            state.write_done(run, chunk_id, {
                 "n_volumes": len(rows), "n_ok": result.n_ok, "n_cached": result.n_cached,
                 "n_failed": len(failed), "failed": failed, "seconds": round(time.time() - t0, 1),
             })
@@ -276,12 +282,12 @@ def _ingest(
                 f"{time.time() - t0:.0f}s"
             )
         except (FetchError, ValueError, OSError, RuntimeError) as exc:
-            state.write_failed(paths, source_name, chunk_id, f"{type(exc).__name__}: {exc}")
+            state.write_failed(run, chunk_id, f"{type(exc).__name__}: {exc}")
             summary.chunks_failed += 1
             consecutive_failures += 1
             log(f"{tag} FAILED: {type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 - one unexpected error must not end a multi-day unattended run
-            state.write_failed(paths, source_name, chunk_id, traceback.format_exc(limit=3))
+            state.write_failed(run, chunk_id, traceback.format_exc(limit=3))
             summary.chunks_failed += 1
             consecutive_failures += 1
             log(f"{tag} UNEXPECTED ERROR: {type(exc).__name__}: {exc}")
@@ -289,45 +295,49 @@ def _ingest(
             state.clear_scratch(raw_dir)
 
 
-    summary.pending_after = len([c for c in all_chunks if c not in state.done_chunks(paths, source_name)])
+    summary.pending_after = len([c for c in all_chunks if c not in state.done_chunks(run)])
     summary.seconds = time.time() - t_start
     log(
-        f"[{source_name}] finished: {summary.chunks_done} chunk(s) done, {summary.chunks_failed} failed, "
+        f"[{source_name}/{run.name}] finished: {summary.chunks_done} chunk(s) done, {summary.chunks_failed} failed, "
         f"{summary.volumes_ok} volumes ok, {summary.volumes_failed} failed volumes, {summary.pending_after} chunk(s) still pending"
         + (f" -- stopped: {summary.stopped}" if summary.stopped else "")
     )
     return summary
 
 
-def _source_cache_gb(cfg: DataConfig, source_name: str) -> tuple[float, int]:
-    """(GB, volumes) of cache files that belong to this source, from its chunk manifests."""
-    folder = state.chunk_manifest_dir(cfg.paths, source_name)
+def _run_cache_gb(run: Run, cache_dir: Path) -> tuple[float, int]:
+    """(GB, volumes) of the cache files this run lists, from its chunk manifests."""
+    folder = run.chunk_manifest_dir
     ids: list[str] = []
     if folder.is_dir():
         for f in sorted(folder.glob("chunk_*.csv")):
             ids += pd.read_csv(f, usecols=["volume_id"])["volume_id"].tolist()
-    return _cache_gb(ids, Path(cfg.paths.cache_dir)), len(ids)
+    return _cache_gb(ids, cache_dir), len(ids)
 
 
-def ingest_status(source_name: str, cfg: DataConfig, fetcher: Fetcher | None = None) -> str:
-    """A short progress report: chunks done, failures, cache size, free disk."""
+def ingest_status(run: Run, cfg: DataConfig, fetcher: Fetcher | None = None) -> str:
+    """A short progress report for one run: chunks done, failures, cache size, free disk; plus a line per
+    other run of the same source."""
     paths = cfg.paths
-    done = state.done_chunks(paths, source_name)
-    failed = state.failed_chunks(paths, source_name)
+    done = state.done_chunks(run)
+    failed = state.failed_chunks(run)
     cache_dir = Path(paths.cache_dir)
     n_vol = sum(i.get("n_ok", 0) + i.get("n_cached", 0) for i in done.values())
     n_bad = sum(i.get("n_failed", 0) for i in done.values())
     total = len(fetcher.chunk_ids()) if fetcher is not None else None
-    gb, n_listed = _source_cache_gb(cfg, source_name)
+    gb, n_listed = _run_cache_gb(run, cache_dir)
     lines = [
-        f"[{source_name}] chunks done: {len(done)}" + (f" / {total}" if total is not None else "")
+        f"[{run.source}/{run.name}] chunks done: {len(done)}" + (f" / {total}" if total is not None else "")
         + f" | failed chunks: {len(failed)} | volumes ok: {n_vol}, failed: {n_bad}",
-        f"cache: {gb:.1f} GB for this source | free disk: {free_gb(cache_dir):.0f} GB",
+        f"cache: {gb:.1f} GB listed by this run | free disk: {free_gb(cache_dir):.0f} GB",
     ]
     if total and done and gb > 0:
         measured_mb = gb * 1000 / max(n_vol, 1)
         projected = measured_mb * (n_listed / len(done)) * total / 1000
-        lines.append(f"measured {measured_mb:.1f} MB/volume -> projected ~{projected:.0f} GB at the end of this source")
+        lines.append(f"measured {measured_mb:.1f} MB/volume -> projected ~{projected:.0f} GB at the end of this run")
     for chunk_id, info in list(failed.items())[:5]:
         lines.append(f"  failed chunk {chunk_id} (attempts {info.get('attempts', '?')}): {str(info.get('error', ''))[:120]}")
+    others = [name for name in list_runs(paths, run.source) if name != run.name]
+    if others:
+        lines.append(f"other runs of {run.source}: {', '.join(others)}")
     return "\n".join(lines)

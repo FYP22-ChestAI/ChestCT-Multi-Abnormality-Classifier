@@ -24,10 +24,10 @@ stopped and resumed at any time.
 python -m pip install -e ".[dev]"
 ```
 ```bash
-python scripts/preprocessing/make_worklist.py        # CT-RATE: decide what to ingest
+python scripts/preprocessing/make_worklist.py        # CT-RATE: plan the run "train-sharp"
 ```
 ```bash
-python scripts/preprocessing/ingest.py --source ctrate --max-chunks 1   # calibration run
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp --max-chunks 1   # calibration run
 ```
 
 Then the full run, merge, QC and split: see the
@@ -48,13 +48,18 @@ src/ct_preprocessing/             the package
   preprocess.py                   preprocess_one: saves the cache + fingerprint sidecar
   manifest.py                     manifest rows (CT-RATE and folder builders); no labels, no split
   config.py                       typed config loading, with validation
+  runs.py                         runs: one folder per worklist, sharing one cache
+  kernels.py                      sharp / soft kernel classes (configs/kernel_classes.csv)
+  cache_record.py                 the cache remembers its preprocessing settings
   inference.py                    run_inference: the same core for one scan or a batch, nothing saved
   ingest/                         the chunked ingest engine
     worklist.py, ctrate.py          CT-RATE: what to fetch, and fetching it from Hugging Face
     archives.py                     NHRD: .zip/.tar archives from Drive (rclone) or a folder
     engine.py                       the resumable ingest loop, disk guard, preprocessing batches
     merge.py, splits.py, state.py   merge, frozen patient-level splits, resume markers
-scripts/preprocessing/            make_worklist.py, ingest.py, merge_manifests.py, qc_report.py, assign_splits.py
+    labels.py                       CT-RATE / NHRD labels, joined into the manifest at merge time
+scripts/preprocessing/            make_worklist.py, ingest.py, merge_manifests.py, qc_report.py, assign_splits.py,
+                                  make_kernel_table.py, kernel_survey.py
 tests/preprocessing/              pytest, synthetic data and fake backends: no download or network needed
 notebooks/                        Colab notebooks for trying the pipeline on a small sample
 ```
