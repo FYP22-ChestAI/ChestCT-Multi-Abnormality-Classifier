@@ -25,12 +25,12 @@ identically there for training (from the cache) and inference (from here).
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+from .cache_record import read_cache_fingerprint
 from .config import DEFAULT_CONFIG_PATH, DataConfig, load_config
 from .dicom_loader import discover_scans, make_scan_id
 from .loaders import detect_format
@@ -59,20 +59,16 @@ class InferenceResult:
 def check_matches_cache(cfg: PreprocessConfig, data_cfg: DataConfig) -> None:
     """Raise ConfigMismatch if ``cfg`` is not what built the cache.
 
-    ``merge_manifests.py`` records the cache's settings fingerprint in
-    ``preprocessing_manifest.json``. A model trained on that cache expects
-    inputs prepared exactly that way, so inference with other settings (a
-    different size, spacing, crop or HU floor) would feed it differently
-    prepared images with no error anywhere. No record yet (no cache has
-    been merged on this machine) means nothing to compare, so no check.
+    Ingest records the settings fingerprint in the cache folder itself (``.cache_fingerprint.json``,
+    one record for every run, since they all share the cache). A model trained on that cache expects
+    inputs prepared exactly that way, so inference with other settings (a different size, spacing,
+    crop or HU floor) would feed it differently prepared images with no error anywhere. No record yet
+    (nothing has been ingested on this machine) means nothing to compare, so no check.
     """
-    record_path = Path(data_cfg.paths.preprocessing_manifest_path)
-    if not record_path.is_file():
-        return
-    recorded = json.loads(record_path.read_text(encoding="utf-8")).get("fingerprint")
+    recorded = read_cache_fingerprint(data_cfg.paths.cache_dir)
     if recorded and recorded != config_fingerprint(cfg):
         raise ConfigMismatch(
-            f"the preprocessing settings differ from the ones the cache in {record_path} was built with "
+            f"the preprocessing settings differ from the ones the cache in {data_cfg.paths.cache_dir} was built with "
             f"(fingerprint {config_fingerprint(cfg)} vs {recorded}). Restore the settings in the config, "
             "re-ingest, or pass check_cache=False if the difference is intended."
         )

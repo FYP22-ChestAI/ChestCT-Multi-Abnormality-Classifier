@@ -28,28 +28,59 @@ Everything the model code needs is two things, plus a record:
      floored). The raw file is deleted after ingest, so this is the only way to
      audit afterwards how a volume's HU were obtained. Bookkeeping, not an interface.
 
-2. **`data/manifest.csv`** -- one row per volume:
+2. **`data/runs/<source>/<run>/manifest.csv`** -- one row per volume of that run
+   (a run is a named plan; see "Runs" below). The cache is shared, so two runs
+   can list the same volume, each in its own manifest:
    - always: `volume_id`, `patient_id`, `scan_path`, `format`, `source_name`,
      `ingest_chunk`, `split`, `qc_passed`, `n_slices`, `spacing_z_mm` /
      `spacing_y_mm` / `spacing_x_mm`, `crop_shape`, `npy_path`;
+   - **kernel columns:** `manufacturer`, `kernel` (the normalised kernel name) and
+     `kernel_class` -- `sharp` (lung / high-resolution), `soft` (mediastinal /
+     standard) or `other` (bone, ultra-high-resolution, or a kernel not in
+     `configs/kernel_classes.csv`). Filter on these to pick the training kernel
+     or to report test results per kernel;
+   - **labels:** `label_<name>` columns when the source has labels (CT-RATE's 18
+     predicted abnormality labels; NHRD's from the labels CSV in its Drive
+     folder), empty where a scan has none. They are joined at merge time only --
+     preprocessing and splitting never read them;
    - CT-RATE rows also: `scan_id`, `reconstruction_id`, `source_split` (which
      official pool the volume came from) and CT-RATE's own metadata columns;
    - DICOM rows also: `series_uid` and acquisition fields read from the tags
-     (manufacturer, model, kernel, slice thickness, series description, contrast
-     flag, transfer syntax). Dates and identifying tags are never recorded.
+     (model, slice thickness, series description, contrast flag, transfer
+     syntax). Dates and identifying tags are never recorded.
    - `split` is one of `train` / `val` / `test`, `excluded` (the volume failed
      QC or was not preprocessed) or `unassigned` (its patient has no frozen
      assignment yet). **Use only `train` / `val` / `test` rows.**
-   - **No labels, ever.** The model code joins labels on its own side, by
-     `volume_id`.
 
-3. **`data/preprocessing_manifest.json`** -- the exact settings that produced the
-   cache, a fingerprint of them, and every volume that failed. A reproducibility
-   record, and a fingerprint the model code can compare to know a derived cache
-   (e.g. precomputed embeddings) is stale.
+   ```python
+   m = pd.read_csv("data/runs/ctrate/train-sharp/manifest.csv")
+   train = m[(m.split == "train") & (m.kernel_class == "sharp") & m.qc_passed]
+   test_sharp = m[(m.split == "test") & (m.kernel_class == "sharp")]
+   test_soft = m[(m.split == "test") & (m.kernel_class == "soft")]
+   ```
+
+3. **`data/runs/<source>/<run>/preprocessing_manifest.json`** -- the run's name, the
+   exact settings that produced the cache, a fingerprint of them, the kernel
+   classes, and every volume that failed. A reproducibility record, and a
+   fingerprint the model code can compare to know a derived cache (e.g.
+   precomputed embeddings) is stale. The cache folder itself also carries
+   `.cache_fingerprint.json`, the one record of the settings that built it.
 
 `data/splits/<source>.csv` holds the frozen patient -> split assignment the
-manifest's `split` column is joined from.
+manifest's `split` column is joined from. It is one file per source, **shared by
+every run**; each run folder keeps a copy limited to its patients.
+
+### Runs
+
+A **run** is a named plan -- "the sharp reconstruction of these patients" -- plus
+everything derived from it: `worklist.csv`, chunk manifests, ingest state,
+`manifest.csv`, `qc_report.csv`, `qc_montages/`. Runs coexist (nothing is ever
+overwritten or deleted) and share the cache, so a second run downloads only what
+the cache lacks. A run can be built from a finished one (`make_worklist.py
+--from-run`): a chosen number of patients from each of its splits, each keeping the
+split it has, so no patient of a validation or test split can be trained on in
+another run. The cache refuses new preprocessing settings (it would overwrite
+volumes older runs point to) unless `--allow-new-settings` says otherwise.
 
 ## Windowing is the model code's job
 
@@ -87,8 +118,8 @@ x = to_channels(slices)   # then ImageNet mean/std normalisation, if the encoder
 
 With no `cfg`, `run_inference` reads its settings and QC thresholds from
 `configs/preprocessing.yaml` -- the file the cache was built with -- and compares
-them with the fingerprint that `merge_manifests.py` recorded in
-`preprocessing_manifest.json`. If the YAML was edited since the cache was built it
+them with the fingerprint the cache folder records (`.cache_fingerprint.json`,
+written by `ingest.py`). If the YAML was edited since the cache was built it
 raises `ConfigMismatch` instead of quietly preparing scans differently (pass
 `check_cache=False` only if that is intended). A `cfg` passed explicitly is used as
 given and not checked; call `check_matches_cache(cfg, data_cfg)` to check it. The
@@ -125,7 +156,7 @@ becomes ~20 MB), so **raw data only has to pass through, once**:
 fetch a chunk -> preprocess into data/cache -> delete the raw chunk -> next chunk
 ```
 
-* **CT-RATE** chunks come from `data/worklists/ctrate.csv` (`make_worklist.py`);
+* **CT-RATE** chunks come from the run's `worklist.csv` (`make_worklist.py`);
   each volume is downloaded by its exact path from Hugging Face.
 * **NHRD** chunks are the `.zip` / `.tar` archives (whole patient folders,
   ~10 GB each) found in a Drive folder; one archive is one chunk.
@@ -142,11 +173,23 @@ Settle them with a small pilot run first.
 
 `make_worklist.py` only decides what is worth ingesting when not everything fits:
 the whole `valid_fixed` pool (the test set, kept whole so numbers stay comparable
-with published CT-RATE results) and, from `train_fixed`, one reconstruction per
-scan, in a seeded random order of patients, optionally capped. The order is a
-seeded patient shuffle and a cap truncates it, so the worklist is
-*prefix-stable*: raising or lowering `max_train_patients` never changes a chunk
-that was already ingested.
+with published CT-RATE results, with **every reconstruction** -- both kernels --
+so a model can be tested on sharp and on soft) and, from `train_fixed`, one
+reconstruction per scan **of the run's kernel** (`train_kernel`: `sharp` or
+`soft`; a scan without it is skipped), in a seeded random order of patients,
+optionally capped. The shuffle is over all train patients, not only those with
+the wanted kernel, so a sharp run and a soft run walk the same patient order,
+and a cap only truncates it: raising or lowering `max_train_patients` never
+changes a chunk that was already ingested.
+
+### Kernels
+
+CT-RATE reconstructs most scans twice (a sharp lung kernel and a soft
+mediastinal one) and keeps both as separate volumes. Which kernels are sharp or
+soft is the reviewed table `configs/kernel_classes.csv`; `make_kernel_table.py`
+drafts it from the metadata and `make_worklist.py --survey` + `kernel_survey.py`
+check it against the images. The kernel and its class are columns of every
+manifest.
 
 ## Splitting: by patient, once, after QC, frozen
 
@@ -161,8 +204,10 @@ that was already ingested.
 * Only **QC-passed** volumes count, so a patient whose scans all failed is not
   assigned, and val/test counts mean usable patients.
 * The assignment is written to `data/splits/<source>.csv` and **never rewritten**.
-  Running again only assigns patients not in the file yet (a top-up), leaving
-  every earlier assignment untouched. Freeze it before the first training run.
+  Running again (for another run, or after a top-up) only assigns patients not in
+  the file yet, leaving every earlier assignment untouched. Freeze it before the
+  first training run. It is shared by every run of the source, so a patient is in
+  the same split in a sharp run and in a soft run.
 
 Why this is leak-free: nothing in this pipeline is fitted to the data (fixed
 spacing, fixed crop threshold, fixed size, no dataset-wide mean or std), so
@@ -188,7 +233,7 @@ loss (e.g. asymmetric / class-weighted) by the model code.
 | Slice axis / order | Axial, head-to-foot (RAS+ z-axis) | Standard; verified visually via QC montages. |
 | Target spacing | **1.5 / 0.75 / 0.75 mm** (z, y, x) | Reference value from the CT-CLIP paper that built CT-RATE. |
 | Resize mode | **"stretch"** | Simple; matches CT-CLIP/AnyMC3D. "pad" (aspect-preserving) is available via config. |
-| Reconstructions | one per scan for the train pool; all for the test pool | The two reconstructions of a scan are near-duplicate rebuilds; keeping both halves the number of distinct patients for the same disk. The test pool stays whole for comparability. |
+| Reconstructions | one per scan of the run's kernel (`sharp` by default) for the train pool; every reconstruction for the test pool | Keeping both reconstructions of every scan would double the cache (~1,060 GB) and does not fit. Sharp matches the local NHRD scans (a sharp lung kernel); a soft run can be added later from a subset of the same patients. The test pool stays whole, with both kernels, for comparability and per-kernel reporting. |
 | Labels | not M1's concern | The model code joins them by `volume_id`. |
 
 ## Real bugs fixed along the way, worth knowing about

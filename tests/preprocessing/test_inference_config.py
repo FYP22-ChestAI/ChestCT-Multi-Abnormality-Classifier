@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from ct_preprocessing.cache_record import CACHE_RECORD
 from ct_preprocessing.config import load_config
 from ct_preprocessing.inference import ConfigMismatch, check_matches_cache, run_inference
 from ct_preprocessing.preprocess import config_fingerprint
@@ -15,14 +16,15 @@ from ct_preprocessing.quality import QCThresholds
 
 
 def write_config(tmp_path, size=64, record_fingerprint=None):
-    record = tmp_path / "preprocessing_manifest.json"
+    cache = tmp_path / "cache"
     if record_fingerprint is not None:
-        record.write_text(json.dumps({"fingerprint": record_fingerprint}))
+        cache.mkdir(exist_ok=True)
+        (cache / CACHE_RECORD).write_text(json.dumps({"fingerprint": record_fingerprint}))
     config = tmp_path / "preprocessing.yaml"
     config.write_text(
         "\n".join([
             "paths:",
-            f"  preprocessing_manifest_path: {record.as_posix()}",
+            f"  cache_dir: {cache.as_posix()}",
             "preprocess:",
             f"  target_size_hw: [{size}, {size}]",
             "  hu_floor: -1024",

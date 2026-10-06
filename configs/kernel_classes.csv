@@ -1,0 +1,42 @@
+manufacturer,kernel,class,n_volumes,agreement,common_description,status
+Philips,B,soft,12834,0.999,(empty),draft
+Philips,YA,sharp,11848,1.0,HRCT,draft
+Siemens Healthineers,Br40f,soft,6911,0.988,"Thorax 1,50 Br40 S3",draft
+Siemens Healthineers,Br60f,sharp,4160,1.0,"Thorax 1,50 Br60 S3",draft
+Siemens Healthineers,Bl56f,sharp,2583,1.0,"Thorax 1,50 Bl56 S3",draft
+PNMS,EA,sharp,1932,1.0,HRCT,draft
+Philips,A,soft,1377,1.0,"MEDIASTEN, iDose (4)",draft
+Philips,L,sharp,1224,1.0,"PARANKIM, iDose (4)",draft
+SIEMENS,Br36d,soft,995,0.999,Thorax Mediasten 1.5  Br36  3,draft
+SIEMENS,Bl57d,sharp,988,1.0,Thorax  Lung 1.5  Bl57  3,draft
+Philips,YB,sharp,909,1.0,"PARANKIM, iDose (4)",draft
+Philips,UB,other,494,0.998,240,draft
+PNMS,SA,soft,285,0.989,(empty),draft
+Philips,D,other,250,1.0,KEMIK,draft
+Siemens Healthineers,Br44f,soft,110,1.0,"Thorax 1,50 Br44 S3",draft
+SIEMENS,B70s,sharp,75,1.0,Thorax_Parankim  1.5  B70s Via,draft
+SIEMENS,B31s,soft,73,1.0,Thorax_Mediasten 1.5  B31s Via,draft
+Philips,E,sharp,20,1.0,HRCT,draft
+PNMS,LungB,sharp,12,0.583,Mediasten,draft
+Siemens Healthineers,Br36f,soft,10,1.0,"Thorax 1,50 Br36 S3",draft
+PNMS,SB,other,8,0.625,(empty),draft
+Siemens Healthineers,Bv44f,soft,8,1.0,"Thorax 1,50 Bv44 S3",draft
+Philips,YC,other,7,1.0,i DOSE,draft
+SIEMENS,Qr40d,soft,6,1.0,#PP  DE_Abdo Art  1.5  Qr40  3  A_100kV,draft
+SIEMENS,Bl64f,sharp,6,1.0,Thorax+HRCT  2.0  Bl64  3,draft
+SIEMENS,Br32f,sharp,5,0.8,Thorax+HRCT  2.0  Br32  3,draft
+SIEMENS,Br32d,soft,3,1.0,DE_Abdo Art  2.0  Br32  3  F_0.7,draft
+Siemens Healthineers,Br64f,sharp,2,1.0,"Lung 1,00 Br64 S3",draft
+Philips,UA,other,2,1.0,iDose (1),draft
+Siemens Healthineers,Bv36f,soft,2,1.0,"CTA Pulmonary 1,50 Bv36 S3",draft
+Philips,C,other,1,1.0,KEMIK,draft
+SIEMENS,Bl57f,sharp,1,1.0,Fl_Thorax  2.0  Bl57  3,draft
+SIEMENS,Bv36d,soft,1,1.0,Fl_Embolism  1.0  Bv36  3,draft
+SIEMENS,Bv40d,soft,1,1.0,Fl_CorCTA  0.75  Bv40  3  65%,draft
+Siemens Healthineers,Bl64f,sharp,1,1.0,"Thorax 1,50 Bl64 S3",draft
+SIEMENS,Bv59d,sharp,1,1.0,Fl_Embolism Lung 1.5  Bv59  3,draft
+Siemens Healthineers,Bl60f,sharp,1,1.0,"Thorax 1,50 Bl60 S3",draft
+Siemens Healthineers,Br56f,sharp,1,1.0,"Thorax 1,50 Br56 S3",draft
+Siemens Healthineers,Hc40f,soft,1,1.0,"Thorax 1,50 Hc40 S3",draft
+Siemens Healthineers,Hr60f,sharp,1,1.0,"Sinus 1,00 Hr60 S3 ax",draft
+TOSHIBA,FC81,sharp,,,,unverified (added by hand)
