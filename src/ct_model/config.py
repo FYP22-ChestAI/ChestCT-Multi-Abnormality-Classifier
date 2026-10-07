@@ -22,7 +22,7 @@ import yaml
 DEFAULT_ENCODE_CONFIG = "configs/model/encode.yaml"
 DEFAULT_ENCODERS_DIR = "configs/model/encoders"
 
-_WEIGHT_SOURCES = ("hf_safetensors", "timm_pretrained", "none")
+_WEIGHT_SOURCES = ("hf_safetensors", "local_safetensors", "timm_pretrained", "none")
 _TRANSFORMS = ("clip_zscore", "multi_window")
 _RESIZE_MODES = ("bilinear", "bicubic", "nearest")
 _POOLINGS = ("cls", "mean_patch", "cls_mean")
@@ -39,9 +39,11 @@ def _check(value, allowed: tuple, name: str) -> None:
 
 @dataclass
 class WeightsConfig:
-    source: str = "none"  # hf_safetensors (a safetensors file in a HF repo) | timm_pretrained | none (random init)
+    # hf_safetensors (a safetensors file in a HF repo) | local_safetensors (``filename`` is a local path)
+    # | timm_pretrained | none (random init: NOT reproducible, so no in-slice heatmaps from its store)
+    source: str = "none"
     hf_repo: str | None = None
-    filename: str = "model.safetensors"
+    filename: str = "model.safetensors"  # file in the HF repo, or the local path for local_safetensors
     revision: str | None = None  # pin a commit sha: a moving branch could change the embeddings silently
     ignore_prefixes: list[str] = field(default_factory=list)  # keys allowed to be missing/unexpected; all others raise
 

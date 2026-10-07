@@ -1,12 +1,12 @@
-# Stages 3 + 4, phase 1: gated ABMIL + linear head on frozen DALE-CT-2S slice embeddings,
-# CT-RATE's 18 abnormalities, run train-sharp-5800. See docs/model/README.md ("Stages 3-4").
+# BASELINE: identical to abmil_dale2s.yaml except the aggregator is a plain masked MEAN of the projected
+# slice embeddings (no attention). Every attention model must beat this to justify itself.
 #
 #   python scripts/model/train_mil.py --experiment abmil_dale2s [--seed 1] [--loss asl] ...
 #
 # Every value is a default; train_mil.py arguments override some of them. The resolved config is saved
 # with the results, and its hash (without name / seed / device / paths) names the results folder.
 
-name: abmil_dale2s
+name: meanpool_dale2s
 data_config: configs/preprocessing.yaml   # cache_dir, runs_dir
 encode_config: configs/model/encode.yaml  # embeddings_dir
 encoder: dale_ct_2s                       # which embedding store (configs/model/encoders/dale_ct_2s.yaml)
@@ -24,11 +24,9 @@ features:
   standardize: true                       # per-dimension mean / std, fitted on TRAIN slices only
 
 aggregator:
-  type: abmil                             # gated attention MIL (Ilse et al. 2018, Eq. 9)
-  hidden_dim: 256                         # projection D=1024 -> 256 (Linear, ReLU, Dropout)
-  attn_dim: 128                           # attention size (L in the paper)
+  type: mean_pool                         # masked mean: the same weight on every slice
+  hidden_dim: 256                         # same projection as abmil_dale2s (Linear, ReLU, Dropout)
   dropout: 0.25
-  branches: single                        # single (the paper) | per_label (one attention per label)
 
 head:
   type: linear

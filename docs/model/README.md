@@ -1,9 +1,13 @@
-# Model pipeline: stage 2 (slice encoder)
+# Model pipeline: stages 2-4
 
-Stage 2 turns every volume of a run into per-slice embeddings. Each volume's `(N, 224, 224)` int16 HU
-in `data/cache/` becomes an `(N, 1024)` float16 array in `data/embeddings/<encoder>-<fp>/`. That
-array is what stages 3 (aggregation) and 4 (classifier) train on in phase 1. How the stages fit
-together, the store format and the roadmap are in [architecture.md](architecture.md).
+- **Stage 2** (this page, first half) turns every volume of a run into per-slice embeddings. Each
+  volume's `(N, 224, 224)` int16 HU in `data/cache/` becomes an `(N, 1024)` float16 array in
+  `data/embeddings/<encoder>-<fp>/`.
+- **Stages 3-4** ([second half](#stages-3-4-train-evaluate-compare)) train ABMIL plus an 18-label head on
+  those embeddings, evaluate on test, and keep every result identifiable for later comparisons.
+- **[Evidence](#evidence-optional)** is optional: per predicted label, which slices and where in them.
+
+How the stages fit together, and why they are built this way, is in [architecture.md](architecture.md).
 
 The HU cache is the source of truth and is only read. The embedding store is derived: delete it and
 re-run to rebuild it.
@@ -13,7 +17,7 @@ re-run to rebuild it.
 ```bash
 python -m pip install -e ".[dev,model]"
 ```
-Installs torch, timm and safetensors with the package. Use a CUDA build of torch on the server (see
+Installs torch, timm, safetensors and scikit-learn with the package. Use a CUDA build of torch on the server (see
 pytorch.org for the right `--index-url`); `python -c "import torch; print(torch.cuda.is_available())"`
 must print `True`.
 
@@ -141,10 +145,208 @@ merged it. A selected volume missing from the cache is an error, never a silent 
 A non-timm family registers a builder with `@register_encoder("<type>")` in `src/ct_model/encoders/`
 and sets `type: <type>` in its YAML (see `registry.py`).
 
+## Stages 3-4: train, evaluate, compare
+
+Phase 1 trains **stage 3 (ABMIL aggregation) and stage 4 (linear head, 18 labels)** on the frozen
+embeddings. The encoder is not trained. The design (equations, imbalance, evaluation protocol) is in
+[architecture.md](architecture.md#stages-3-4-aggregation-and-classification-phase-1).
+
+### 0. Embeddings for the run (once)
+
+```bash
+python scripts/model/encode_volumes.py --run train-sharp-5800 --dry-run
+```
+```bash
+python scripts/model/encode_volumes.py --run train-sharp-5800 2>&1 | tee -a encode_train-sharp-5800.log
+```
+Run the second command in tmux (see stage 2 above). Every usable volume of the run gets embeddings:
+train, val and test, both kernels; 10,042 volumes, ~4.7 GB. Training refuses to start if any selected
+volume is missing.
+
+### 1. Train, in tmux
+
+```bash
+tmux new -s train
+```
+```bash
+python scripts/model/train_mil.py --experiment abmil_dale2s 2>&1 | tee -a train_abmil_dale2s.log
+```
+Detach with `Ctrl+b d`; `tmux a -t train` reattaches.
+- **First line:** the settings actually used.
+- **Each epoch:** train / val loss and val macro AUROC / AUPRC; `*best` marks a new best epoch.
+- **Interrupted?** Run the same command again: it resumes from the last finished epoch.
+- **Finished?** That config + seed is refused; nothing is ever overwritten.
+
+Training reads **train and val only**. At the end it writes the val predictions and the per-label
+thresholds (chosen on val), and adds a row to `outputs/experiments/index.csv`.
+
+**How long.**
+- **Steps:** an epoch is `ceil(5,827 / 16) = 365` steps. The budget is 100 epochs (36,500 steps), and
+  training stops after 15 epochs without improvement.
+- **Measure, don't assume:** look at the best epoch in the report notebook. If it is in the last 10 %
+  of the budget, raise `--max-epochs`.
+
+### 2. Compare on val (several configurations × 5 seeds)
+
+Same tmux pattern, one command per run. Seeds of one configuration share a config hash and are averaged:
+```bash
+for s in 0 1 2 3 4; do python scripts/model/train_mil.py --experiment abmil_dale2s --seed $s; done
+```
+
+**Recommended first comparisons.** Each changes one thing against `abmil_dale2s` (BCE, single attention):
+
+| Question | Command change |
+|---|---|
+| Does attention beat a plain mean? | `--experiment meanpool_dale2s` |
+| One attention per label? | `--experiment abmil_perlabel_dale2s` |
+| Does the loss handle imbalance better? | `--loss weighted_bce`, `--loss asl` |
+
+Then summarise the ledger (mean ± std per configuration):
+```bash
+python scripts/model/summarize_experiments.py
+```
+Pick on **val** macro AUPRC / AUROC. Test is not looked at yet.
+
+### 3. Evaluate on test, once per chosen run
+
+```bash
+python scripts/model/evaluate_mil.py --experiment-dir outputs/experiments/abmil_dale2s/<hash8>/seed0
+```
+- **What it uses:** the best checkpoint, with the thresholds chosen on val, unchanged.
+- **What it reports:** overall, **per kernel class** (sharp vs soft is the cross-kernel result) and
+  **per scanner**, with patient-level bootstrap 95 % CIs.
+- **Where:** results go to `eval/ctrate__train-sharp-5800__test/` in the run folder, plus a row in
+  `outputs/experiments/evaluations.csv`.
+- **Repeats are refused.** `--overwrite` redoes an evaluation deliberately.
+
+`summarize_experiments.py --split test` compares the evaluated runs.
+
+### 4. Look at it
+
+Open `notebooks/mil_training_report.ipynb`. It shows the ledger, learning curves (budget check),
+per-label val AUROC, test overall / sharp vs soft / per scanner, and the configurations side by side.
+
+### Where results are, and how they are identified
+
+```
+outputs/experiments/
+  index.csv                        every finished training run: run_id, config hash, key settings, seed,
+                                   git commit, best epoch, val metrics, folder
+  evaluations.csv                  every evaluation: run_id, split, run, macro AUROC (+ CI), per-kernel AUROC
+  <name>/<config hash8>/seed<k>/   one training run (layout in architecture.md)
+```
+
+- **Run id:** `<name>/<hash8>/seed<k>`.
+- **What the config hash covers:** everything that changes what is learned:
+  - the resolved config (without name, seed, device and paths);
+  - the embedding store (encoder, weights commit, preprocessing);
+  - the run manifest (volumes, splits, labels).
+- **Using it:** two runs with the same hash are the same experiment with different seeds. Keep
+  `outputs/` (it is git-ignored) and the ledgers make any later comparison possible.
+
+### Arguments
+
+#### `scripts/model/train_mil.py`
+
+Defaults come from `configs/model/experiments/<experiment>.yaml`; each argument overrides one key. Any
+change to a hashed setting creates a new config hash, so the run goes to a new folder.
+
+| Argument | Values | Default (YAML key) | What it does |
+|---|---|---|---|
+| `--experiment NAME` | a file in `configs/model/experiments/` (without `.yaml`), or a path | required | the experiment config |
+| `--run NAME` | a run of the source | `data.run` (`train-sharp-5800`) | whose manifest gives splits and labels |
+| `--seed N` | integer | `seed` (0) | seed for initialisation, shuffling, dropout; not part of the config hash |
+| `--loss T` | `bce` `weighted_bce` `asl` | `loss` (`bce`) | loss type; ASL keeps its reference defaults |
+| `--lr X` | > 0 | `optim.lr` (2e-4) | peak learning rate (AdamW) |
+| `--weight-decay X` | ≥ 0 | `optim.weight_decay` (0.01) | weight decay on weight matrices |
+| `--batch-size N` | ≥ 1 | `optim.batch_size` (16) | volumes per step |
+| `--max-epochs N` | ≥ 1 | `optim.max_epochs` (100) | epoch budget |
+| `--patience N` | ≥ 1 | `optim.patience` (15) | epochs without improvement before stopping |
+| `--device D` | `auto` `cuda` `cpu` | `device` (`auto`) | where to train |
+| `--output-dir PATH` | folder | `output_dir` (`outputs/experiments`) | where runs and ledgers go |
+
+Settable only in the YAML:
+- `data.train_kernel_classes`, `data.labels`, `data.train_slice_sampler`, `data.preload`;
+- `features.standardize`;
+- the aggregator's `type`, `hidden_dim`, `attn_dim`, `dropout`, `branches`;
+- the head's `type` and `dropout`, and `head_prior_bias`;
+- loss parameters (e.g. ASL's `gamma_neg`);
+- `optim.warmup_epochs`, `grad_clip`, `monitor`.
+
+#### `scripts/model/evaluate_mil.py`
+
+| Argument | Values | Default | What it does |
+|---|---|---|---|
+| `--experiment-dir DIR` | a finished run folder | required | the run to evaluate |
+| `--split S` | `train` `val` `test` | `test` | split to score |
+| `--source NAME` | a source | the experiment's | to score another source (same labels) |
+| `--run NAME` | a run | the experiment's | to score another run (e.g. a soft subset) without retraining |
+| `--kernel-classes K [K ...]` | e.g. `soft` | all | only these kernel classes |
+| `--bootstrap N` | ≥ 0 | 1000 | bootstrap resamples (patients) for the 95 % CIs; 0 = none |
+| `--min-group N` | ≥ 1 | 100 | smaller groups are flagged `too_small` and get no CI |
+| `--device D` | `auto` `cuda` `cpu` | `auto` | where to predict |
+| `--overwrite` | flag | off | redo an existing evaluation |
+
+#### `scripts/model/summarize_experiments.py`
+
+| Argument | Values | Default | What it does |
+|---|---|---|---|
+| `--output-dir PATH` | folder | `outputs/experiments` | where the ledgers are |
+| `--split S` | `val` `test` | `val` | val results (`index.csv`) or evaluations (`evaluations.csv`) |
+| `--name NAME` | experiment name | all | only this experiment |
+
+#### `scripts/model/explain_volume.py`
+
+| Argument | Values | Default | What it does |
+|---|---|---|---|
+| `--experiment-dir DIR` | a finished run folder | required | the trained model |
+| `--volume-id ID` | a usable volume of the run | required | the volume to explain |
+| `--labels L [L ...]` | label names | labels predicted positive at the val thresholds | which labels |
+| `--top-k N` | ≥ 1 | 5 | top slices shown per label |
+| `--heatmaps` | flag | off | also in-slice Grad-CAM maps (re-encodes the top slices: use a GPU) |
+| `--min-cosine X` | 0-1 | 0.99 | required agreement between re-encoded and stored embedding |
+| `--run NAME` | a run | the experiment's | the run holding the volume |
+| `--device D` | `auto` `cuda` `cpu` | `auto` | where to run |
+
+## Evidence (optional)
+
+Nothing in training depends on it. To see why the model predicted a label for one volume:
+
+```bash
+python scripts/model/explain_volume.py --experiment-dir outputs/experiments/abmil_dale2s/<hash8>/seed0 --volume-id valid_1127_a_1 --heatmaps
+```
+Or use `notebooks/evidence_viewer.ipynb`, which calls the same functions interactively.
+
+**Which slices (L1).** The exact contribution of every slice to the label's logit: positive pushes
+towards "present". These come from the trained model alone, with no approximation.
+
+**Where in the slice (L2, `--heatmaps`).** A Grad-CAM map over the top slices. The encoder is rebuilt
+from the embedding store's own record, and its re-encoded slice must match the stored embedding.
+
+Output goes to `<run>/explain/<volume_id>/`: one PNG per label plus `evidence.json` (probabilities,
+val thresholds, top slices and their contributions).
+
+**Before trusting the heatmaps**, run the two sanity checks in the notebook (section 3) on a few
+volumes:
+- randomising the head must change the map;
+- blanking the top patches must lower the logit more than blanking random ones.
+
+**Limits.**
+- **Not a localisation:** this is what the model relied on, not a validated localisation of the
+  finding.
+- **Slice numbers:** they are slices of the preprocessed volume (1.5 mm, head to foot, body-cropped),
+  not original DICOM slice numbers.
+
 ## Troubleshooting
 
 | Message | Meaning / fix |
 |---|---|
+| no progress lines in the terminal or log for a long time | an old checkout: every `scripts/model` script now line-buffers its output, so `\| tee` shows each line as it happens. For an already running old process, count the outputs instead (e.g. `ls <store>/*.npy \| wc -l`), or restart it with `python -u` (it resumes) |
+| `... volume(s) have no embeddings in ...` | run `encode_volumes.py --run <run>` first (all splits) |
+| `... is already trained` | that config + seed is finished; use another `--seed`, change a setting, or evaluate it |
+| `... this evaluation was already done` | results exist; `--overwrite` only if redoing it is intended |
+| `val val_macro_auroc cannot be computed` | no label has both classes in val: the val split is too small |
+| `re-encoded slice ... has cosine ...` | the encoder / weights / volume differ from what the classifier saw; heatmaps refused |
 | `StoreMismatch ... HU cache fingerprint` | the cache was rebuilt with other preprocessing settings since these embeddings were made. Delete that store folder and re-encode |
 | `StoreMismatch ... weights commit` | the encoder YAML now points at other weights. Revert, or delete the store folder |
 | `checkpoint ... does not match the model` | `arch` / `model_args` do not match the weights file |
@@ -158,5 +360,16 @@ and sets `type: <type>` in its YAML (see `registry.py`).
 ```bash
 python -m pytest tests/model
 ```
-The tests use synthetic volumes and a tiny random ViT, with no download and no GPU.
-`test_dale_transform_equals_model_card` checks our input transform against the model card's code.
+The tests use synthetic volumes, a synthetic embedding store with planted findings, and a tiny random
+ViT, with no download and no GPU. What they verify against a reference:
+
+| Component | Checked against |
+|---|---|
+| DALE input transform | the model card's `CTInferenceTransform` code |
+| ABMIL | Eq. 7 and Eq. 9 of Ilse et al. 2018, computed by hand; padding and permutation invariance |
+| `weighted_bce` / `bce` | `torch.nn.BCEWithLogitsLoss` (with `pos_weight`) |
+| `asl` | an independent re-implementation of the authors' reference code, values and gradient |
+| metrics | scikit-learn; max-F1 thresholds by brute force; bootstrap draws whole patients |
+| slice evidence (L1) | logits = sum of contributions + bias, exactly; top slice = planted slice (≥ 90 %) |
+| heatmaps (L2) | an independent autograd computation of Grad-CAM |
+| training / evaluation | learns a planted signal (val AUROC > 0.9), never reads test, resumes, never overwrites |

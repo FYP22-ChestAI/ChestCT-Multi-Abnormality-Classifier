@@ -28,6 +28,8 @@ from ct_preprocessing.ingest.engine import free_gb
 from ct_model.config import DEFAULT_ENCODE_CONFIG, load_encoder_config, load_stage2_config
 from ct_model.data.volumes import load_run_manifest, missing_cache_files, select_volumes
 from ct_model.embeddings.store import open_store, read_store_record, store_dir
+from ct_model.utils.log import stream_logs
+
 
 _BYTES = {"float16": 2, "float32": 4}
 
@@ -56,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 @friendly_errors
 def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
     args = build_parser().parse_args()
     cfg = load_stage2_config(args.config)
     sel, enc = cfg.selection, cfg.encode
@@ -122,7 +125,7 @@ def main() -> int:
 
     device = resolve_device(settings["device"])
     amp_dtype = resolve_amp_dtype(settings["amp_dtype"], device)
-    print(f"device {describe_device(device)}, autocast {amp_dtype or 'off (float32)'}")
+    print(f"device {describe_device(device)}, autocast {amp_dtype or 'off (float32)'}", flush=True)
     encoder = build_encoder(enc_cfg)
     store = open_store(
         settings["embeddings_dir"], enc_cfg, hu_cache_fingerprint=hu_fp,
