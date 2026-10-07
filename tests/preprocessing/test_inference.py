@@ -40,7 +40,7 @@ def test_run_inference_flags_a_qc_failure_without_raising(synthetic_nifti):
 def test_run_inference_flags_a_hard_error_on_a_bad_file(tmp_path):
     bad = tmp_path / "corrupt.nii.gz"
     bad.write_bytes(b"not a real nifti file")
-    [out] = run_inference(bad)
+    [out] = run_inference(bad, cfg=PreprocessConfig())
     assert not out.passed
     assert out.hu is None
     assert out.qc is None and out.error
@@ -48,4 +48,4 @@ def test_run_inference_flags_a_hard_error_on_a_bad_file(tmp_path):
 
 def test_run_inference_raises_when_nothing_is_found_at_all():
     with pytest.raises(FileNotFoundError):
-        run_inference("does/not/exist")
+        run_inference("does/not/exist", cfg=PreprocessConfig())

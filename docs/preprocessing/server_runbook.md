@@ -2,13 +2,20 @@
 
 Copy-paste commands for running the preprocessing on the server, with what each one
 does. Run everything from the repository root. Every script reads its defaults from
-`configs/preprocessing.yaml` (chunk size 40, `min_free_gb` 100, ...); you only add
-arguments to override them. The first line of every run prints the settings actually used.
+`configs/preprocessing.yaml` (chunk size 40, `min_free_gb` 100, sharp kernel, ...); you only
+add arguments to override them. The first line of every run prints the settings actually used.
 
 The full explanation is in [README.md](README.md); this page is just the order of commands.
 
-**Order:** 0 Setup → 1 CT-RATE → 2 NHRD → 3 Finish (merge, QC, splits).
+**Order:** 0 Setup → 1 CT-RATE → 2 NHRD → 3 Later: a soft run.
 The two sources are independent: do either one first.
+
+**Two ideas to know first**
+- A **run** is one named plan with its own folder (`data/runs/<source>/<run>/`: worklist, manifest,
+  QC report). Runs coexist, nothing is overwritten, and they all share one cache (`data/cache/`) and one
+  split per source. Scripts take `--run NAME`; with a single run it is chosen for you.
+- The kernel setting `train_kernel: sharp` (default) takes the sharp (lung) reconstruction of each
+  train scan. The test pool (`valid_fixed`) always takes every reconstruction, both kernels.
 
 ---
 
@@ -29,56 +36,93 @@ Never share or commit the token.
 ```bash
 df -h .
 nproc
+free -g
 ```
-Check free disk (the plan assumes about 850 GB) and CPU count.
+Check free disk (the plan assumes about 850 GB), CPU count and RAM.
 
 Ask the server admin before starting:
 - Do compute nodes have outbound internet (Hugging Face, Google)?
 - Is there a disk quota or a walltime limit? Is SLURM used?
+- How much RAM does a job get? (Use `--workers 1` for the first calibration run and watch peak memory.)
 
 ---
 
 ## 1. CT-RATE
 
-**1.1 Build the worklist** (minutes, downloads only two small CSVs, about 16 MB):
+**1.0 Check the sharp / soft kernel table (once).** `configs/kernel_classes.csv` says which kernels are
+sharp and which are soft. Have it reviewed by a person; to check it against the images, run the small survey:
+```bash
+python scripts/preprocessing/make_worklist.py --survey 5
+python scripts/preprocessing/ingest.py --source ctrate --run kernel-survey
+python scripts/preprocessing/kernel_survey.py --source ctrate --run kernel-survey
+```
+`--survey 5` makes a run of about 150 volumes: 5 scans per kernel pair, both reconstructions of each. After
+ingest, `kernel_survey.py` measures which reconstruction of each pair is the sharper one and reports, per kernel,
+whether it agrees with the table (`ok` / `DISAGREES` / `check`). The table is never changed for you: edit the CSV.
+
+**1.1 Plan the run** (minutes, downloads only the metadata and label CSVs, about 19 MB):
 ```bash
 python scripts/preprocessing/make_worklist.py
 ```
-Writes `data/worklists/ctrate.csv`: exactly which volumes to fetch, grouped into chunks
-of 40. Test pool (the official `valid_fixed`, 3,039 volumes) comes first, then the train
-pool, one reconstruction per scan, in a seeded random order of patients. It prints the
-totals and the projected cache size, so check that it fits the disk. It refuses to
-overwrite an existing worklist.
-If the projected size does not fit, add `--max-train-patients N` (for example 10000).
+Creates the run `train-sharp` in `data/runs/ctrate/train-sharp/`: the whole test pool (3,039 volumes, both kernels)
+and the sharp reconstruction of each train scan, in a seeded random order of patients, in chunks of 40. It prints
+how many scans are skipped for lack of a sharp reconstruction, how many volumes are already in the cache, how many
+must be downloaded, and the projected cache size. Check that it fits the disk; if not, add
+`--max-train-patients N` (for example 10000). It refuses to overwrite a run that exists.
+Open `notebooks/kernel_label_distribution.ipynb` now (no images needed) to see how the abnormalities
+are distributed by kernel and scanner.
 
 **1.2 Calibration run, one chunk only:**
 ```bash
-python scripts/preprocessing/ingest.py --source ctrate --max-chunks 1
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp --max-chunks 1
 ```
-Fetches chunk 0 (40 test volumes), preprocesses them into `data/cache/*.npy`, writes the
-chunk manifest, deletes the raw files, then stops. It shows the real MB per volume and the
-seconds per chunk, and proves the server can reach Hugging Face.
-Check the result:
+Fetches chunk 0 (40 test volumes), preprocesses them into `data/cache/*.npy`, writes the chunk manifest, deletes
+the raw files, then stops. It shows the real MB per volume and the seconds per chunk, and proves the server can
+reach Hugging Face.
 ```bash
-python scripts/preprocessing/ingest.py --source ctrate --status
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp --status
 ```
 Prints chunks done, volumes ok/failed, cache size, free disk, and the measured size per volume.
 
 **1.3 Full run, in tmux so it survives logging out:**
 ```bash
 tmux new -s ctrate
-python scripts/preprocessing/ingest.py --source ctrate
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp
 ```
-Loops over every pending chunk: fetch → preprocess → write manifest → delete raw → mark done.
-It stops cleanly if free disk drops below 100 GB, or after 3 failed chunks in a row.
-Detach with `Ctrl+b` then `d`. Come back with `tmux attach -t ctrate`.
-If it stops for any reason, run the same command again: finished chunks and cached volumes
+Loops over every pending chunk: fetch → preprocess → write manifest → delete raw → mark done. It stops cleanly if
+free disk drops below 100 GB, or after 3 failed chunks in a row. Detach with `Ctrl+b` then `d`; come back with
+`tmux attach -t ctrate`. If it stops for any reason, run the same command again: finished chunks and cached volumes
 are skipped, nothing is downloaded twice.
-
-Useful extras:
 ```bash
-python scripts/preprocessing/ingest.py --source ctrate --dry-run        # list pending chunks, change nothing
-python scripts/preprocessing/ingest.py --source ctrate --retry-failed   # re-run chunks that had failed volumes
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp --dry-run        # list pending chunks, change nothing
+python scripts/preprocessing/ingest.py --source ctrate --run train-sharp --retry-failed   # re-run chunks that had failed volumes
+```
+The cache remembers the preprocessing settings that built it. If the `preprocess:` block of the config changed,
+ingest refuses to write into it; fix the config, or pass `--allow-new-settings` on purpose.
+
+**1.4 Merge, QC, split:**
+```bash
+python scripts/preprocessing/merge_manifests.py --source ctrate --run train-sharp
+python scripts/preprocessing/qc_report.py --source ctrate --run train-sharp
+python scripts/preprocessing/assign_splits.py --source ctrate --run train-sharp --dry-run
+python scripts/preprocessing/assign_splits.py --source ctrate --run train-sharp
+```
+- `merge_manifests.py` writes the run's `manifest.csv`: one row per volume with `kernel`, `kernel_class`,
+  `manufacturer`, the `label_*` columns (CT-RATE's predicted labels) and the frozen split (`unassigned` until the
+  split is made). It also prints the kernel class counts and how many rows have labels.
+- `qc_report.py` re-checks every cached volume and writes `qc_report.csv` plus montage pictures
+  (one per 25 volumes, plus every failure). Look at the failures and a few montages.
+- `assign_splits.py` splits **by patient**, after QC, and freezes it in `data/splits/ctrate.csv`: test = the
+  official valid pool, validation = 1,000 patients drawn from the train pool, the rest = train. The `--dry-run`
+  line previews it. The split is shared by every run, and a copy for this run is written into its folder.
+
+Final output for the run: `data/cache/*.npy` and `data/runs/ctrate/train-sharp/manifest.csv`.
+Training and evaluation filter that table:
+```python
+m = pd.read_csv("data/runs/ctrate/train-sharp/manifest.csv")
+train = m[(m.split == "train") & (m.kernel_class == "sharp") & m.qc_passed]
+test_sharp = m[(m.split == "test") & (m.kernel_class == "sharp")]
+test_soft = m[(m.split == "test") & (m.kernel_class == "soft")]
 ```
 
 ---
@@ -119,6 +163,15 @@ Upload each zip by hand in the browser to a folder named `nhrd_raw` in **My Driv
 (for example `nhrd_A_001.zip`, `nhrd_A_002.zip`). Make sure the hospital-data approval
 allows storing it on Google Drive.
 
+**Labels (optional).** Put a CSV in the **same Drive folder** (for example `labels.csv`): the first column
+identifies the scan (by default its path, `4203-26/P00001/S0001`), the other columns are the abnormality labels:
+```
+scan_path,Lung nodule,Pleural effusion
+4203-26/P00001/S0001,1,0
+```
+Then set `sources.nhrd_local.labels: {file: labels.csv, key: scan_path}` in `configs/preprocessing.yaml`
+(`key` can also be `patient_id` or `volume_id`). It holds patient identifiers: the same approval applies.
+
 ### 2.2 Connect the server to Drive (once)
 
 ```bash
@@ -135,8 +188,8 @@ chmod 600 ~/.config/rclone/rclone.conf
 rclone lsd gdrive:
 rclone lsf gdrive:nhrd_raw
 ```
-The first command must list `nhrd_raw`; the second must list the zip files. If either fails,
-stop and fix it. Revoke the token from the Google account's third-party access page when finished.
+The first command must list `nhrd_raw`; the second must list the zip files (and `labels.csv`). If either
+fails, stop and fix it. Revoke the token from the Google account's third-party access page when finished.
 
 ### 2.3 Ingest
 
@@ -144,7 +197,8 @@ Preview first:
 ```bash
 python scripts/preprocessing/ingest.py --source nhrd_local --dry-run
 ```
-Lists the pending archives (one chunk per archive). Nothing is downloaded.
+Lists the pending archives (one chunk per archive). Nothing is downloaded. NHRD has a single run, `main`, which is
+created the first time you ingest, so `--run` is not needed.
 
 Calibration, one archive:
 ```bash
@@ -172,71 +226,62 @@ command again: only the new ones are processed.
 ```bash
 python scripts/preprocessing/merge_manifests.py --source nhrd_local --patients-file patients_on_disk.txt
 ```
-Writes `data/manifest.csv`. With the checklist it also reports patient folders that never
-arrived and folders that were not on the checklist.
+Writes `data/runs/nhrd_local/main/manifest.csv`. With the checklist it also reports patient folders that never
+arrived and folders that were not on the checklist. If labels are configured it reads them from Drive and says
+how many scans were labelled.
 **Expected:** `0 patient folder(s) missing`, `0 not on the checklist`, and no
 "far more scans than the rest" warning.
 If it says every patient is missing and shows archive names as "not on the checklist",
 the archives were zipped one level too high (see 2.1). Fix the zips, re-upload, then delete
-the NHRD results and re-ingest:
+the NHRD run's state and its results and re-ingest:
 ```bash
-rm -rf data/ingest_state/nhrd_local data/manifests/nhrd_local data/raw/nhrd_local
-rm -f data/manifest.csv data/preprocessing_manifest.json data/qc_report.csv
+rm -rf data/ingest_state/nhrd_local data/runs/nhrd_local
 ```
 (and remove the NHRD `.npy` and `.meta.json` files from `data/cache/`).
 
----
+### 2.5 QC and split
 
-## 3. Finish (both sources)
-
-**3.1 Merge:**
 ```bash
-python scripts/preprocessing/merge_manifests.py
-```
-Combines the per-chunk manifests of every source into `data/manifest.csv` (one row per
-volume) and writes `data/preprocessing_manifest.json` (the settings and fingerprint that
-produced the cache, plus what failed). Every `split` shows `unassigned` for now: that is
-expected, splits are decided last.
-
-**3.2 Quality check:**
-```bash
-python scripts/preprocessing/qc_report.py
-```
-Re-checks every cached volume (slice count, HU range, flat images) and writes
-`data/qc_report.csv` plus montage pictures in `data/qc_montages/` (one picture per 25
-volumes, plus every failure). Look at the failures and a few montages. It can be re-run any
-time without touching raw data.
-
-**3.3 Freeze the splits (once per source):**
-```bash
-python scripts/preprocessing/assign_splits.py --source ctrate --dry-run
-python scripts/preprocessing/assign_splits.py --source ctrate
+python scripts/preprocessing/qc_report.py --source nhrd_local
 python scripts/preprocessing/assign_splits.py --source nhrd_local --dry-run
 python scripts/preprocessing/assign_splits.py --source nhrd_local
 ```
-Splits are assigned **by patient**, after QC, and then frozen in `data/splits/<source>.csv`.
-- CT-RATE: test = the official valid pool; validation = 1,000 patients drawn from the train
-  pool; the rest = train.
-- NHRD: 150 validation and 150 test patients are drawn; the rest = train.
-- Volumes that failed QC are marked `excluded`. `--dry-run` previews without freezing.
-
-**3.4 Merge once more so the frozen splits appear in the manifest:**
+150 validation and 150 test patients are drawn (the NHRD defaults) and the rest are train; the split is frozen in
+`data/splits/nhrd_local.csv`. Then merge once more so the manifest carries the frozen split:
 ```bash
-python scripts/preprocessing/merge_manifests.py
+python scripts/preprocessing/merge_manifests.py --source nhrd_local
 ```
-Final output: `data/cache/*.npy` and `data/manifest.csv` with a `train`/`val`/`test`
-value for every usable volume.
+
+---
+
+## 3. Later: a soft run (to adapt to soft-kernel scans)
+
+Build it from patients the sharp run has **already split**, so nothing leaks: here 800 patients from its train
+split and 200 from its validation split, each keeping the split it has.
+```bash
+python scripts/preprocessing/make_worklist.py --train-kernel soft --from-run train-sharp --train-patients 800 --val-patients 200
+python scripts/preprocessing/ingest.py --source ctrate --run train-soft
+python scripts/preprocessing/merge_manifests.py --source ctrate --run train-soft
+python scripts/preprocessing/qc_report.py --source ctrate --run train-soft
+python scripts/preprocessing/assign_splits.py --source ctrate --run train-soft
+```
+Only the soft volumes missing from the cache are downloaded (the test pool is already there). The first run's
+files are not touched. With two runs on disk, every script needs `--run`.
 
 ---
 
 ## Rules to remember
 
-- Do not delete or edit anything under `data/ingest_state/`, `data/worklists/` or `data/splits/`
-  between runs. They are what make runs resumable and the splits permanent.
+- Do not delete or edit anything under `data/ingest_state/`, `data/runs/` or `data/splits/`
+  between runs. They are what make runs resumable and the splits permanent. A run is never overwritten:
+  a new plan is a new run.
 - Freeze the preprocessing settings (`preprocess:` in the config) before the real run. The
-  raw data is deleted after each chunk, so changing them later means re-downloading.
-- One `ingest.py` per source at a time. A second one stops with a lock message.
+  raw data is deleted after each chunk, so changing them later means re-downloading everything.
+  The cache refuses new settings unless you pass `--allow-new-settings`.
+- One `ingest.py` per source at a time (all of a source's runs share one scratch folder). A second one
+  stops with a lock message.
 - Re-running any command after an interruption is always safe.
+- Labels are only joined into the manifest. They never decide which scans are kept or which patient goes where.
 
 ## If something goes wrong
 
@@ -245,6 +290,11 @@ value for every usable volume.
 | `stopped: free disk ... is below min_free_gb` | Free space, or lower it for a test: `--min-free-gb 10`. |
 | `rclone is not installed or not on PATH` / `rclone lsf failed` | Install rclone and finish `rclone config`; test with `rclone lsd gdrive:`. |
 | 401 / 403 from Hugging Face | Accept the CT-RATE terms on the dataset page, then `huggingface-cli login`. |
-| Worklist already exists | It is protected. Use `--force` only if no finished chunk would change. |
-| Chunk finished with failed volumes | `ingest.py --source <name> --retry-failed`. |
+| `run ... already exists -- runs are never overwritten` | Use it (`--run NAME`) or choose another name with `--name`. |
+| `source ... has several runs (...)` | Add `--run NAME`. |
+| `the cache ... was built with other preprocessing settings` | Restore the `preprocess:` block, or pass `--allow-new-settings` knowingly. |
+| `kernel table ... not found` | `python scripts/preprocessing/make_kernel_table.py` drafts one; have it reviewed. |
+| `run ... has no frozen split yet` | Run merge, QC and `assign_splits.py` on the parent run first. |
+| `warning: labels not read` | Labels are optional; check the Drive file name, or use `--labels-file`. |
+| Chunk finished with failed volumes | `ingest.py --source <name> --run <run> --retry-failed`. |
 | Run died or SSH dropped | Run the same `ingest.py` command again. |

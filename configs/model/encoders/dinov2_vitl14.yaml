@@ -1,0 +1,32 @@
+# EXAMPLE second backbone (untested on our data): generic DINOv2 ViT-L/14, natural-image pretrained.
+# It shows how a backbone is swapped -- `encode_volumes.py --encoder dinov2_vitl14` -- and that the
+# input transform belongs to the backbone: this one wants the data contract's 3 HU windows as RGB
+# plus ImageNet normalisation, not DALE's 1-channel z-score.
+
+name: dinov2_vitl14
+type: timm_vit
+arch: vit_large_patch14_dinov2.lvd142m
+model_args:
+  num_classes: 0
+  img_size: 224                           # 224 = 16x16 patches of 14 px (the cache size was chosen for this)
+embed_dim: 1024
+
+weights:
+  source: timm_pretrained                 # timm downloads its own pretrained weights
+  revision: null
+  ignore_prefixes: []
+
+input:
+  transform: multi_window
+  windows:                                # docs/preprocessing/data_contract.md, "Windowing"
+    - [-1000.0, 400.0]                    # lung
+    - [-150.0, 250.0]                     # soft tissue
+    - [-1000.0, 1000.0]                   # all tissue
+  channel_mean: [0.485, 0.456, 0.406]     # ImageNet
+  channel_std: [0.229, 0.224, 0.225]
+  size_hw: [224, 224]
+  resize_mode: bilinear
+
+pooling: cls
+store_dtype: float16
+lora: null

@@ -23,7 +23,7 @@ DEFAULT_CONFIG_PATH = "configs/preprocessing.yaml"
 _FORMATS = ("nifti", "dicom", "auto")
 _BUILDERS = ("ctrate", "folder")
 _PATIENT_ID_SOURCES = ("auto", "path", "dicom_tag")
-_POOLS = ("one_per_scan", "all")
+_TRAIN_KERNELS = ("sharp", "soft")
 
 
 def _check(value, allowed: tuple, name: str) -> None:
@@ -34,16 +34,12 @@ def _check(value, allowed: tuple, name: str) -> None:
 @dataclass
 class PathsConfig:
     raw_dir: str = "data/raw"  # parent of every source's scratch folder (see SourceConfig.raw_dir)
-    cache_dir: str = "data/cache"  # the permanent output: one .npy + .meta.json per volume
-    manifest_path: str = "data/manifest.csv"
-    qc_report_path: str = "data/qc_report.csv"
-    montage_dir: str = "data/qc_montages"
-    preprocessing_manifest_path: str = "data/preprocessing_manifest.json"
-    metadata_dir: str = "data/metadata"  # CT-RATE metadata CSVs
-    worklist_dir: str = "data/worklists"  # make_worklist.py output (CT-RATE)
-    chunk_manifest_dir: str = "data/manifests"  # one small manifest per ingested chunk
-    state_dir: str = "data/ingest_state"  # .done / .failed markers, so ingest can resume
-    splits_dir: str = "data/splits"  # frozen patient -> split files
+    cache_dir: str = "data/cache"  # the permanent output, shared by every run: one .npy + .meta.json per volume
+    runs_dir: str = "data/runs"  # one folder per run: <runs_dir>/<source>/<run name>/ (worklist, manifest, QC, ...)
+    metadata_dir: str = "data/metadata"  # CT-RATE metadata and label CSVs, NHRD labels
+    state_dir: str = "data/ingest_state"  # per source: the ingest lock and the sticky patient-id decision
+    splits_dir: str = "data/splits"  # frozen patient -> split files, one per source, shared by every run
+    kernel_table: str = "configs/kernel_classes.csv"  # which (manufacturer, kernel) pairs are sharp / soft
 
 
 @dataclass
@@ -54,10 +50,12 @@ class IngestConfig:
     min_free_gb: float = 100.0  # stop cleanly (never crash the server) when free disk drops below this
     workers: int = 4  # parallel preprocessing processes
     est_mb_per_volume: float = 22.0  # only for the projected-cache-size estimate; replace with the measured value
+    est_raw_gb_per_volume: float = 0.43  # only for the download-size estimate printed by make_worklist.py (CT-RATE average)
     # --- CT-RATE: the worklist and how it is fetched
     chunk_size: int = 40  # volumes fetched, preprocessed and cleaned up together
-    train_pool: str = "one_per_scan"  # "one_per_scan" keeps one reconstruction per scan; "all" keeps both
-    test_pool: str = "all"  # the whole valid_fixed pool by default (comparable with published CT-RATE numbers)
+    train_kernel: str = "sharp"  # which reconstruction of each train scan: "sharp" (lung) or "soft"; scans without it are skipped
+    # The test pool (the official valid_fixed set) is always taken whole, with every reconstruction (both kernels):
+    # results stay comparable with published CT-RATE numbers and can be reported per kernel.
     max_train_patients: int | None = None  # cap the train pool if the calibration run says the cache will not fit
     max_test_patients: int | None = None  # cap the test pool (only for small pilot runs; the default keeps it whole)
     max_combined_gb: float | None = None  # skip TRAIN volumes needing more resample memory than this (metadata only)
@@ -68,8 +66,7 @@ class IngestConfig:
     drive_remote: str | None = None  # an rclone remote like "gdrive:nhrd_raw", or a plain folder path
 
     def __post_init__(self) -> None:
-        _check(self.train_pool, _POOLS, "ingest.train_pool")
-        _check(self.test_pool, _POOLS, "ingest.test_pool")
+        _check(self.train_kernel, _TRAIN_KERNELS, "ingest.train_kernel")
         if self.chunk_size < 1:
             raise ValueError(f"ingest.chunk_size must be >= 1, got {self.chunk_size}")
         if self.workers < 1 or self.fetch_workers < 1:
@@ -93,6 +90,20 @@ class SplitConfig:
 
 
 @dataclass
+class LabelsConfig:
+    """Where an archive source's abnormality labels are. The CSV sits in the same Drive folder as the
+    archives (it is not mistaken for an archive); one row per scan or patient. ``key`` is the manifest
+    column its first column matches: ``scan_path`` (e.g. ``4203-26/P00001/S0001``), ``patient_id``
+    or ``volume_id``. Every other column becomes a ``label_<name>`` column of the manifest."""
+
+    file: str | None = None  # file name in the Drive folder, e.g. "labels.csv"; None = no labels
+    key: str = "scan_path"
+
+    def __post_init__(self) -> None:
+        _check(self.key, ("scan_path", "patient_id", "volume_id"), "labels.key")
+
+
+@dataclass
 class SourceConfig:
     """One named data source (CT-RATE, the local NHRD hospital data, ...)."""
 
@@ -107,6 +118,7 @@ class SourceConfig:
     patient_path_depth: int = 1
     # Per-source overrides of the global `qc:` thresholds, e.g. {"min_slices": 60}.
     qc: dict = field(default_factory=dict)
+    labels: LabelsConfig = field(default_factory=LabelsConfig)
     ingest: IngestConfig = field(default_factory=IngestConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
 
@@ -141,7 +153,8 @@ def _parse_source(name: str, raw: dict) -> SourceConfig:
     try:
         ingest = IngestConfig(**(raw.pop("ingest", None) or {}))
         split = SplitConfig(**(raw.pop("split", None) or {}))
-        return SourceConfig(ingest=ingest, split=split, **raw)
+        labels = LabelsConfig(**(raw.pop("labels", None) or {}))
+        return SourceConfig(ingest=ingest, split=split, labels=labels, **raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid config for source {name!r}: {exc}") from exc
 

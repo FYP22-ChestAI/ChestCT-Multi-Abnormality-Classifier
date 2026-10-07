@@ -15,20 +15,28 @@ from .device import resolve_device
 from .types import Volume
 
 
-def _resample_gpu(hu: np.ndarray, new_shape: tuple[int, int, int]) -> np.ndarray:
-    """Trilinear resample on the GPU via torch. Much faster than the CPU/scipy
-    path and, crucially, the large intermediate array lives in GPU VRAM
-    rather than system RAM -- this is what avoided the OOM in a reference
-    notebook doing the equivalent CPU-vs-GPU comparison on real CT-RATE data.
+def _resample_gpu(hu: np.ndarray, new_shape: tuple[int, int, int], device: str = "cuda") -> np.ndarray:
+    """Trilinear resample with torch. Much faster than the CPU/scipy path on a
+    GPU and, crucially, the large intermediate array lives in GPU VRAM rather
+    than system RAM -- this is what avoided the OOM in a reference notebook
+    doing the equivalent CPU-vs-GPU comparison on real CT-RATE data.
+
+    ``align_corners=True`` is deliberate: it is the sampling convention of
+    scipy's ``zoom`` (output sample i reads input position i*(n_in-1)/(n_out-1)),
+    so a scan resampled here equals the same scan resampled on the CPU path.
+    With torch's default (False) the two differ by up to about a quarter voxel,
+    and a cache built on one device would not match inference on the other.
+    ``device`` exists so the equivalence can be tested on a CPU-only machine.
     """
     import torch
     import torch.nn.functional as F
 
-    t = torch.from_numpy(np.ascontiguousarray(hu)).to("cuda", dtype=torch.float32)[None, None]
-    t = F.interpolate(t, size=tuple(int(s) for s in new_shape), mode="trilinear", align_corners=False)
+    t = torch.from_numpy(np.ascontiguousarray(hu)).to(device, dtype=torch.float32)[None, None]
+    t = F.interpolate(t, size=tuple(int(s) for s in new_shape), mode="trilinear", align_corners=True)
     out = t[0, 0].to("cpu").numpy()
     del t
-    torch.cuda.empty_cache()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     return out
 
 

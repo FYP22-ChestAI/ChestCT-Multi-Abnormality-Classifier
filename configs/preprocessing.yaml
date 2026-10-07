@@ -12,19 +12,16 @@
 
 paths:
   raw_dir: data/raw                       # parent of each source's scratch folder
-  cache_dir: data/cache                   # the permanent output: one .npy + .meta.json per volume
-  manifest_path: data/manifest.csv
-  qc_report_path: data/qc_report.csv
-  montage_dir: data/qc_montages
-  preprocessing_manifest_path: data/preprocessing_manifest.json
-  metadata_dir: data/metadata             # CT-RATE metadata CSVs
-  worklist_dir: data/worklists            # make_worklist.py output (CT-RATE)
-  chunk_manifest_dir: data/manifests      # one small manifest per ingested chunk
-  state_dir: data/ingest_state            # .done / .failed markers, so ingest can resume
-  splits_dir: data/splits                 # frozen patient -> split files
+  cache_dir: data/cache                   # the permanent output, SHARED by every run: one .npy + .meta.json per volume
+  runs_dir: data/runs                     # one folder per run: <runs_dir>/<source>/<run name>/ -- worklist, manifest, QC report
+  metadata_dir: data/metadata             # CT-RATE metadata and label CSVs, NHRD labels
+  state_dir: data/ingest_state            # per source: the ingest lock, the sticky patient-id decision
+  splits_dir: data/splits                 # frozen patient -> split files, one per source, shared by every run
+  kernel_table: configs/kernel_classes.csv  # which (manufacturer, kernel) pairs are sharp / soft (reviewed by a person)
 
 # Named data sources. `ingest` holds the defaults for make_worklist.py / ingest.py,
-# `split` the defaults for assign_splits.py. No labels are read for any source.
+# `split` the defaults for assign_splits.py. Labels are only joined into the manifest
+# (merge_manifests.py); preprocessing and splitting never read them.
 sources:
   # CT-RATE: NIfTI volumes on Hugging Face. Its train_fixed/ pool feeds train+val,
   # its valid_fixed/ pool is the test set (the official split, kept whole).
@@ -34,8 +31,8 @@ sources:
     manifest_builder: ctrate
     ingest:
       chunk_size: 40                      # volumes fetched + preprocessed + cleaned up together
-      train_pool: one_per_scan            # one reconstruction per scan (halves the cache); or "all"
-      test_pool: all                      # the whole valid_fixed pool
+      train_kernel: sharp                 # which reconstruction of each train scan: sharp (lung) or soft; scans without it are skipped
+                                          # (the test pool -- valid_fixed -- always takes every reconstruction, both kernels)
       max_train_patients: null            # cap if the calibration run says the cache will not fit
       max_test_patients: null             # cap the test pool -- only for small pilot runs
       max_combined_gb: null               # skip TRAIN volumes needing more resample memory than this
@@ -45,6 +42,7 @@ sources:
       fetch_workers: 4                    # parallel downloads inside one chunk
       hf_repo: ibrahimhamamci/CT-RATE
       est_mb_per_volume: 22               # only for the projected-size estimate; use the measured value
+      est_raw_gb_per_volume: 0.43         # only for the download-size estimate printed by make_worklist.py
     split:
       n_val_patients: 1000                # drawn from train-pool patients; test = the valid pool
       seed: 0
@@ -57,6 +55,9 @@ sources:
     manifest_builder: folder
     patient_id_source: auto               # decides path vs dicom_tag once, from the first archive
     patient_path_depth: 1                 # NHRD: each top folder (e.g. 4214-26) is one patient
+    labels:                               # optional labels CSV in the same Drive folder as the archives
+      file: null                          # e.g. labels.csv ; null = no labels
+      key: scan_path                      # what its first column holds: scan_path, patient_id or volume_id
     ingest:
       drive_remote: "gdrive:nhrd_raw"     # an rclone remote, or a plain folder path
       min_free_gb: 100
@@ -77,8 +78,9 @@ preprocess:
   crop_cc_downsample: 4                   # downsample factor for the connected-component search only (memory safety)
   resize_mode: stretch                    # "stretch" (independent W,H) or "pad" (aspect-preserving)
   min_change_ratio: 0.05                  # skip resampling an axis already this close to target
+  hu_floor: -1024                         # values below this are scanner padding (-8192 on Siemens go.All) -> set to it; null = off
   device: cpu                             # "cpu" (always works), or "auto"/"cuda" to use a GPU when present
-  version: m1-v2
+  version: m1-v3
 
 qc:
   min_slices: 80
