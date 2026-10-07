@@ -5,6 +5,8 @@ Weights:
     into ``timm.create_model(arch, **model_args)``. Loading is strict: every missing or unexpected
     key raises, except those under ``weights.ignore_prefixes``. (The DALE model card's own snippet
     uses ``strict=False``, which would silently leave a random layer in place if a key name differed.)
+  * ``local_safetensors`` -- a safetensors file on disk (``weights.filename``), loaded the same strict way;
+    its sha256 is recorded, since a local file has no commit.
   * ``timm_pretrained`` -- timm's own pretrained weights for ``arch``.
   * ``none`` -- random initialisation (tests, debugging).
 
@@ -105,6 +107,12 @@ def build_timm_vit(cfg: EncoderConfig) -> TimmViTEncoder:
         path, commit = download_hf_weights(weights)
         report = load_checkpoint(model, path, weights.ignore_prefixes)
         provenance.update(weights_repo=weights.hf_repo, weights_file=weights.filename, weights_commit=commit,
+                          weights_ignored=report["ignored_missing"] + report["ignored_unexpected"])
+    elif weights.source == "local_safetensors":
+        from ct_model.training.records import file_sha256
+
+        report = load_checkpoint(model, weights.filename, weights.ignore_prefixes)
+        provenance.update(weights_file=str(weights.filename), weights_sha256=file_sha256(weights.filename),
                           weights_ignored=report["ignored_missing"] + report["ignored_unexpected"])
     elif weights.source == "timm_pretrained":
         pcfg = getattr(model, "pretrained_cfg", {}) or {}

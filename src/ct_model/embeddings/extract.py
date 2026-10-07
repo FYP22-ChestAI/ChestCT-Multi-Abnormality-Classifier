@@ -26,6 +26,7 @@ from ct_preprocessing.ingest.engine import free_gb
 
 from ..data.datasets import HUVolumeDataset
 from ..data.volumes import VolumeRecord
+from ..utils.log import say
 from .store import EmbeddingStore
 
 _OOM = getattr(torch, "OutOfMemoryError", torch.cuda.OutOfMemoryError)
@@ -56,7 +57,7 @@ def encode_slices(
     device: torch.device,
     amp_dtype: torch.dtype | None,
     slice_batch_size: int,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] = say,
 ) -> tuple[np.ndarray, int]:
     """(K, H, W) HU slices -> ((K, D) float32 embeddings, the slice batch size that fitted)."""
     out: list[torch.Tensor] = []
@@ -90,7 +91,7 @@ def encode_volumes(
     slice_batch_size: int = 128,
     num_workers: int = 2,
     min_free_gb: float = 0.0,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] = say,
     log_every: int = 25,
 ) -> EncodeSummary:
     summary = EncodeSummary(selected=len(records), slice_batch_size=slice_batch_size)
