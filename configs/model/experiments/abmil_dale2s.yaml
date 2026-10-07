@@ -1,0 +1,39 @@
+# TODO (stages 3 + 4, phase 1) -- schema sketch for the next team member; nothing reads this file yet.
+# See docs/model/architecture.md, "Roadmap". Suggested script: scripts/model/train_mil.py --experiment abmil_dale2s
+#
+# Phase 1 trains ONLY the aggregator + head, on the frozen embeddings stage 2 already wrote.
+
+name: abmil_dale2s
+encoder: dale_ct_2s                       # which embedding store to read (configs/model/encoders/<name>.yaml)
+
+data:
+  source: ctrate
+  run: null                               # the run whose manifest gives splits + labels
+  train_kernel_classes: [sharp]
+  eval_kernel_classes: [sharp, soft]      # report test metrics per kernel (data contract)
+  labels: null                            # null = every label_* column of the manifest (18 for CT-RATE)
+  slice_sampler: {mode: all}              # all | stride | uniform_k | random_k (ct_model.data.slices)
+
+aggregator:
+  type: abmil                             # abmil (gated attention, Ilse et al. 2018); later: query_mil / qgmil
+  hidden_dim: 256
+  dropout: 0.25
+
+head:
+  type: linear
+  dropout: 0.0
+
+loss:
+  type: bce                               # bce | asl (asymmetric) | weighted_bce -- imbalance handled here, not in splits
+
+optim:
+  optimizer: adamw
+  lr: 2.0e-4
+  weight_decay: 1.0e-4
+  epochs: 50
+  batch_size: 16                          # volumes per step (bags padded + masked)
+  warmup_epochs: 2
+  early_stopping_metric: val_macro_auroc
+
+output_dir: outputs/experiments           # outputs/experiments/<name>/<timestamp>/ : config snapshot, checkpoints, metrics
+seed: 0

@@ -1,0 +1,29 @@
+# Stage 2 (slice encoder) settings -- see docs/model/README.md and docs/model/architecture.md.
+#
+# Every value here is a DEFAULT. scripts/model/encode_volumes.py takes a command-line argument
+# that overrides it for one run (e.g. `--encoder dinov2_vitl14 --slice-batch-size 64`) and prints
+# the settings it actually used as its first line.
+#
+# Stage 2 reads the HU cache (the source of truth, never modified) and writes a DERIVED cache of
+# per-slice embeddings: data/embeddings/<encoder name>-<fingerprint>/{volume_id}.npy. It can be
+# deleted and rebuilt at any time; changing anything in the encoder file starts a new folder.
+
+data_config: configs/preprocessing.yaml   # where cache_dir / runs_dir come from (the file the cache was built with)
+encoder: dale_ct_2s                       # a file in configs/model/encoders/ (name without .yaml), or a path to one
+
+# Which volumes to encode: rows of one run's manifest (data/runs/<source>/<run>/manifest.csv).
+selection:
+  source: ctrate
+  run: null                               # null = the only run of the source on disk
+  splits: [train, val, test]              # never "excluded" / "unassigned" (data contract)
+  qc_passed_only: true
+  kernel_classes: null                    # e.g. [sharp] or [soft]; null = every kernel class the run holds
+
+encode:
+  embeddings_dir: data/embeddings         # parent of one store folder per encoder config, SHARED by every run
+  device: auto                            # "auto" (GPU when present), "cuda" or "cpu"
+  amp_dtype: auto                         # "auto" (bfloat16 on a GPU that supports it, else float32), "bfloat16", "float16", "float32"
+  slice_batch_size: 128                   # slices per forward pass; halves itself automatically on CUDA out-of-memory
+  num_workers: 2                          # DataLoader processes reading volumes from the cache (each ~25 MB int16)
+  min_free_gb: 20                         # stop cleanly when free disk on the store's filesystem drops below this
+  limit: null                             # encode at most this many volumes (smoke tests); null = all selected
