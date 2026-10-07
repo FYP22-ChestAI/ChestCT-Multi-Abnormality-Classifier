@@ -7,8 +7,9 @@ the local **NHRD** hospital DICOM data -- into a compact, model-ready cache of
 Hounsfield-unit volumes plus a manifest with frozen patient-level train / val / test
 splits. It also holds the **model side** that consumes that output (`ct_model`):
 stage 2, a swappable 2D slice encoder (DALE-CT-2S first) that writes per-slice
-embeddings, and the interfaces and TODO stubs for stage 3 (MIL aggregation: ABMIL,
-then query-based / QGMIL) and stage 4 (multi-label classifier). Report-to-label extraction lives in a sibling repo in this GitHub
+embeddings; stage 3, MIL aggregation of those embeddings (gated ABMIL now, query-based /
+QGMIL later); stage 4, the 18-abnormality classifier; plus experiment records and optional
+per-label evidence (which slices, and where in them). Report-to-label extraction lives in a sibling repo in this GitHub
 organization (`ChestCT-Report2Label`).
 
 The pipeline processes data in chunks (fetch → preprocess → delete the raw data), so
@@ -19,8 +20,8 @@ stopped and resumed at any time.
 |---|---|
 | **[docs/preprocessing/README.md](docs/preprocessing/README.md)** | **How to run the pipeline**: setup, the scripts and their arguments, CT-RATE and NHRD walkthroughs, running unattended, config, troubleshooting |
 | [docs/preprocessing/data_contract.md](docs/preprocessing/data_contract.md) | What the pipeline produces (cache and manifest format) and why: the agreement with the model code |
-| **[docs/model/README.md](docs/model/README.md)** | **How to run stage 2** (the slice encoder): smoke test, encode a run, resume, add a backbone |
-| [docs/model/architecture.md](docs/model/architecture.md) | Stages 2-4, the embedding store format (stage 2 -> 3 contract), roadmap and TODOs, memory / disk budget |
+| **[docs/model/README.md](docs/model/README.md)** | **How to run the model side**: stage 2 (encode), stages 3-4 (train, evaluate, compare), evidence |
+| [docs/model/architecture.md](docs/model/architecture.md) | Stages 2-4 and why they are built this way: store format, ABMIL, imbalance, evaluation, evidence, roadmap |
 
 ## Quickstart
 
@@ -55,7 +56,7 @@ python scripts/model/encode_volumes.py --run train-sharp
 ```
 configs/preprocessing.yaml        all defaults (paths, sources, ingest, split, preprocess, QC)
 configs/model/                    encode.yaml (stage-2 defaults), encoders/<name>.yaml (one backbone each),
-                                  experiments/ (stage 3+4, TODO)
+                                  experiments/<name>.yaml (stages 3+4: ABMIL, per-label ABMIL, mean-pool baseline)
 docs/preprocessing/               README.md (how to run) and data_contract.md (what comes out)
 docs/model/                       README.md (how to run stage 2) and architecture.md (stages, store format, roadmap)
 src/ct_preprocessing/             the package
@@ -78,16 +79,19 @@ src/ct_preprocessing/             the package
     merge.py, splits.py, state.py   merge, frozen patient-level splits, resume markers
     labels.py                       CT-RATE / NHRD labels, joined into the manifest at merge time
 src/ct_model/                     the model side (stages 2-4)
-  encoders/                       stage 2: SliceEncoder interface, HU input transforms, timm ViT backbones, LoRA (TODO)
+  encoders/                       stage 2: SliceEncoder interface, HU input transforms, timm ViT backbones, LoRA (TODO, phase 2)
   embeddings/                     the embedding store (derived, fingerprinted) and the encode loop
   data/                           manifest -> volume records, slice samplers, datasets (HU slices, embedding bags)
-  aggregators/ heads/ models/     stage 3 (ABMIL, query MIL) and 4 (classifier): interfaces + TODO stubs
-  training/                       TODO: trainer, losses, metrics
+  aggregators/ heads/ models/     stage 3 (ABMIL, mean pool; query MIL TODO) and 4 (linear head), composed
+  training/                       experiment config, losses, metrics, trainer, evaluation, experiment records
+  explain/                        optional evidence: exact slice contributions, in-slice Grad-CAM
 scripts/preprocessing/            make_worklist.py, ingest.py, merge_manifests.py, qc_report.py, assign_splits.py,
                                   make_kernel_table.py, kernel_survey.py
-scripts/model/                    encode_volumes.py, check_encoder.py, train_mil.py (TODO)
+scripts/model/                    encode_volumes.py, check_encoder.py, train_mil.py, evaluate_mil.py,
+                                  summarize_experiments.py, explain_volume.py
 tests/preprocessing/, tests/model/  pytest, synthetic data and fake backends: no download or network needed
-notebooks/                        Colab notebooks for trying the pipeline on a small sample; encoder_embeddings_report.ipynb
+notebooks/                        Colab notebooks for trying the pipeline on a small sample; encoder_embeddings_report,
+                                  mil_training_report, evidence_viewer
 ```
 
 ## Setup notes

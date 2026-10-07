@@ -56,10 +56,16 @@ class EmbeddingBagDataset(Dataset):
     """Stages 3 + 4: one item per volume -- its bag of slice embeddings and its label vector.
 
     ``store`` is a ct_model.embeddings.store.EmbeddingStore. Missing labels (NaN) are returned as 0
-    with ``label_mask`` False, so the loss can ignore them.
+    with ``label_mask`` False, so the loss can ignore them. ``label_index`` picks a subset of the
+    records' labels (default: all, in manifest order).
+
+    ``preload=True`` reads every bag into RAM once, as stored (float16; ~0.47 MB per volume, so the
+    5,827 + 1,178 train / val volumes of train-sharp-5800 take ~3.3 GB). Use it with
+    ``num_workers=0``: worker processes would each need their own copy.
     """
 
-    def __init__(self, records: list[VolumeRecord], store, sampler: SliceSampler | None = None, seed: int = 0):
+    def __init__(self, records: list[VolumeRecord], store, sampler: SliceSampler | None = None, seed: int = 0,
+                 preload: bool = False, label_index: list[int] | None = None):
         missing = [r.volume_id for r in records if not store.has(r.volume_id, r.n_slices)]
         if missing:
             raise FileNotFoundError(
@@ -71,15 +77,28 @@ class EmbeddingBagDataset(Dataset):
         self.sampler = sampler or SliceSampler("all")
         self.seed = seed
         self.epoch = 0  # set by the training loop so random_k draws new slices every epoch
+        self.label_index = label_index
+        self._bags = [np.array(store.load(r.volume_id)) for r in self.records] if preload else None
 
     def __len__(self) -> int:
         return len(self.records)
 
+    def bag(self, i: int) -> np.ndarray:
+        """Volume i's full (n_slices, D) embeddings, as stored."""
+        return self._bags[i] if self._bags is not None else self.store.load(self.records[i].volume_id)
+
+    def labels(self) -> np.ndarray:
+        """(n_volumes, n_labels) float array of the selected labels; NaN = missing."""
+        y = np.asarray([r.labels for r in self.records], dtype=np.float32)
+        return y if self.label_index is None else y[:, self.label_index]
+
     def __getitem__(self, i: int) -> dict:
         rec = self.records[i]
-        emb = self.store.load(rec.volume_id)
+        emb = self.bag(i)
         idx = self.sampler(emb.shape[0], np.random.default_rng((self.seed, self.epoch, i)))
         labels = np.asarray(rec.labels, dtype=np.float32)
+        if self.label_index is not None:
+            labels = labels[self.label_index]
         mask = ~np.isnan(labels)
         return {
             "volume_id": rec.volume_id,

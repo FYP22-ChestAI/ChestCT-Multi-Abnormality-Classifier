@@ -24,10 +24,12 @@ from ct_preprocessing.config import load_config
 from ct_model.config import DEFAULT_ENCODE_CONFIG, load_encoder_config, load_stage2_config
 from ct_model.data.slices import SliceSampler
 from ct_model.data.volumes import load_run_manifest, select_volumes
+from ct_model.utils.log import stream_logs
 
 
 @friendly_errors
 def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=DEFAULT_ENCODE_CONFIG)
     ap.add_argument("--encoder")
