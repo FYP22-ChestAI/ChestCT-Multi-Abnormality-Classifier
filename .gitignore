@@ -1,6 +1,8 @@
 # Pipeline data -- never commit scans, caches, manifests, or anything downloaded from
 # CT-RATE / the local NHRD dataset. See docs/preprocessing/data_contract.md.
 /data/
+# Model experiment outputs (checkpoints, metrics) -- see docs/model/architecture.md.
+/outputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

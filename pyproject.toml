@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ct-preprocessing"
-version = "0.2.0"
-description = "Chest CT preprocessing: chunked ingest of CT-RATE and local DICOM data into a raw-HU .npy cache for the ChestAI multi-abnormality classifier"
+version = "0.3.0"
+description = "ChestAI multi-abnormality chest CT classifier: preprocessing (chunked ingest into a raw-HU .npy cache) and the model stages (slice encoder, MIL aggregation, classifier)"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
@@ -22,6 +22,8 @@ dependencies = [
 # Only for GPU resampling (preprocess.device: cuda / auto in configs/preprocessing.yaml).
 # Everything else, including the default CPU path, works without torch installed.
 torch = ["torch>=2.0"]
+# The model side (src/ct_model): slice encoders and the embedding store. LoRA (phase 2) will also need peft.
+model = ["torch>=2.1", "timm>=1.0", "safetensors>=0.4"]
 # Needed only if the DICOM files are compressed (JPEG / JPEG 2000).
 dicom-codecs = ["pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg"]
 dev = ["pytest>=7.0"]

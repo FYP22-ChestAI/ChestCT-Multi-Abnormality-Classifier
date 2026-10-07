@@ -1,0 +1,36 @@
+# DALE-CT-2S: ViT-Large trained from scratch on CT-RATE train slices (LeJEPA + dense auxiliary
+# supervision). https://huggingface.co/Kentucky-Open-Science/DALE-CT-2S  (CC BY-NC-SA 4.0)
+#
+# Values below are copied from the model's config.json and model card. Do not "tidy" them: the
+# input transform must match training exactly. Changing ANY value here gives the encoder a new
+# fingerprint, so its embeddings go to a new store folder and never mix with the old ones.
+
+name: dale_ct_2s
+type: timm_vit
+arch: vit_large_patch14_dinov2            # the timm architecture, overridden below to patch 16 / 1 channel
+model_args:
+  patch_size: 16
+  img_size: 512                           # native size: position embeddings are a 32x32 grid ...
+  in_chans: 1
+  num_classes: 0
+  dynamic_img_size: true                  # ... interpolated at run time for our 224x224 slices (14x14 tokens)
+embed_dim: 1024                           # checked against the built model; lets --dry-run estimate disk use
+
+weights:
+  source: hf_safetensors
+  hf_repo: Kentucky-Open-Science/DALE-CT-2S
+  filename: model.safetensors
+  revision: a29a028d88b0e6b20c9681290adfa0da1a8ab27c   # pinned commit, so "main" moving can never change our embeddings silently
+  ignore_prefixes: []                     # checkpoint/model keys allowed to differ; anything else is an error
+
+input:
+  transform: clip_zscore                  # 1 channel: clip HU, then z-score (model card: CTInferenceTransform)
+  clip_hu: [-997.0, 888.0]                # 0.5% / 99.5% foreground percentiles of CT-RATE
+  mean_hu: -142.39
+  std_hu: 360.97
+  size_hw: [224, 224]                     # the cache's size, so no resize; must be a multiple of the patch size (16)
+  resize_mode: bilinear                   # only used when size_hw differs from the cache (e.g. a 256 / 448 ablation)
+
+pooling: cls                              # cls (= model(x), global_pool "token") | mean_patch | cls_mean (concat, 2x dim)
+store_dtype: float16                      # lossless for bfloat16 outputs; float32 doubles the store
+lora: null                                # phase 2 (TODO, ct_model.encoders.lora); must stay null until implemented
