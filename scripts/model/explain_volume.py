@@ -23,9 +23,7 @@ from ct_preprocessing.cli import friendly_errors, show_settings
 from ct_model.utils.log import stream_logs
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--experiment-dir", required=True)
     ap.add_argument("--volume-id", required=True)
@@ -35,7 +33,13 @@ def main() -> int:
     ap.add_argument("--min-cosine", type=float, default=0.99, help="re-encoded vs stored embedding agreement needed for L2")
     ap.add_argument("--run", help="data run holding the volume (default: the experiment's)")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
     show_settings("explain_volume", vars(args))
 
     import matplotlib

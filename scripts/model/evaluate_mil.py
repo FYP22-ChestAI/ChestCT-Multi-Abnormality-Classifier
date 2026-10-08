@@ -17,9 +17,7 @@ from ct_preprocessing.cli import friendly_errors, show_settings
 from ct_model.utils.log import stream_logs
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--experiment-dir", required=True, help="a finished run: outputs/experiments/<name>/<hash>/seed<k>")
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
@@ -30,7 +28,13 @@ def main() -> int:
     ap.add_argument("--min-group", type=int, default=100, help="groups smaller than this are flagged too_small, no CI")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     ap.add_argument("--overwrite", action="store_true")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
     show_settings("evaluate_mil", {k: v for k, v in vars(args).items()})
 
     from ct_model.training.evaluate import evaluate_experiment

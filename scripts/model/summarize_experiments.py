@@ -53,14 +53,18 @@ def summarize(output_dir: str | Path, split: str = "val", name: str | None = Non
     return out.reset_index().sort_values(f"{metrics[0]}_mean", ascending=False)
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--output-dir", default="outputs/experiments")
     ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--name", help="only this experiment name")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
     table = summarize(args.output_dir, args.split, args.name)
     path = Path(args.output_dir) / f"summary_{args.split}.csv"
     table.to_csv(path, index=False, lineterminator="\n")

@@ -37,17 +37,22 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
-    args = build_parser().parse_args()
-    cfg = override(
+def experiment_from_args(args: argparse.Namespace):
+    """The experiment config with this command's overrides applied (also used by the UI's pipeline status)."""
+    return override(
         load_experiment(args.experiment),
         **{"data.run": args.run, "seed": args.seed, "loss": {"type": args.loss} if args.loss else None,
            "optim.lr": args.lr, "optim.weight_decay": args.weight_decay, "optim.batch_size": args.batch_size,
            "optim.max_epochs": args.max_epochs, "optim.patience": args.patience, "device": args.device,
            "output_dir": args.output_dir},
     )
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
+    cfg = experiment_from_args(args)
     show_settings("train_mil", {
         "experiment": cfg.name, "run": cfg.data.run, "seed": cfg.seed, "encoder": cfg.encoder,
         "aggregator": cfg.aggregator, "head": cfg.head, "loss": cfg.loss, "lr": cfg.optim.lr,
