@@ -223,8 +223,11 @@ python scripts/model/evaluate_mil.py --experiment-dir outputs/experiments/abmil_
 
 ### 4. Look at it
 
-Open `notebooks/mil_training_report.ipynb`. It shows the ledger, learning curves (budget check),
-per-label val AUROC, test overall / sharp vs soft / per scanner, and the configurations side by side.
+Open `notebooks/experiments_report.ipynb` and *Run all*. It reads every run folder under
+`outputs/experiments/` (no folder to pick): an inventory of all runs, every config averaged over its seeds on
+val and on test (overall / sharp vs soft / per scanner), the training curves of all configs together (budget
+and over-fitting check), per-finding AUROC against a reference config, and one run in detail. The loading is
+in `ct_model.training.results`, for use elsewhere.
 
 ### Where results are, and how they are identified
 
