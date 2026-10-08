@@ -51,6 +51,37 @@ python scripts/model/check_encoder.py --run train-sharp
 python scripts/model/encode_volumes.py --run train-sharp
 ```
 
+## Control panel (Streamlit)
+
+Every script can also be run from a browser UI. It shows each step in pipeline order, with every argument
+pre-filled with the value the script would use anyway, read from the same YAML configs. Hover over ⓘ on a
+field to see what it means and which config the default comes from. Change only what you need: the
+page shows the exact command (only changed arguments are added). **Run** starts it as a background job
+that keeps going if the browser is closed. **Jobs** shows live logs and a Stop button, and **Results**
+compares finished experiments.
+
+```bash
+python -m pip install -e ".[ui]"
+```
+```bash
+streamlit run app/main.py
+```
+
+**Run whole pipeline** does every step in one click: choose the run, the experiments and the seeds. Each
+step is checked against what is already saved (worklist, ingested chunks, manifest, QC report, splits,
+embeddings, trained runs by config hash, evaluations), and only the missing steps run, in order, as one
+background job that stops at the first failure. Settings you changed on a step's own page are used too.
+
+On the server, open it from your laptop through an SSH tunnel (`ssh -L 8501:localhost:8501 <server>`,
+then http://localhost:8501). Job logs go to `outputs/ui_jobs/`.
+
+To add a script: give it a module-level `build_parser()` (like `scripts/model/train_mil.py`), then add one
+`ScriptSpec` to [app/registry.py](app/registry.py). Its fields are read from the parser. Optional extras:
+plain-language labels and tooltips in [app/arg_docs.yaml](app/arg_docs.yaml), and a defaults resolver in
+`app/defaults.py`. New experiment YAMLs, runs and encoders appear in the dropdowns automatically. To make
+a new script part of the one-click pipeline, also add a `Stage` to `app/pipeline.py` and a status check
+("is it done?") to `app/status.py`.
+
 ## Project layout
 
 ```
@@ -89,7 +120,9 @@ scripts/preprocessing/            make_worklist.py, ingest.py, merge_manifests.p
                                   make_kernel_table.py, kernel_survey.py
 scripts/model/                    encode_volumes.py, check_encoder.py, train_mil.py, evaluate_mil.py,
                                   summarize_experiments.py, explain_volume.py
-tests/preprocessing/, tests/model/  pytest, synthetic data and fake backends: no download or network needed
+app/                              Streamlit control panel: registry.py (scripts by phase), one generic page per script,
+                                  background jobs (outputs/ui_jobs/), results viewer
+tests/preprocessing/, tests/model/, tests/ui/  pytest, synthetic data and fake backends: no download or network needed
 notebooks/                        Colab notebooks for trying the pipeline on a small sample; encoder_embeddings_report,
                                   experiments_report, evidence_viewer
 ```
