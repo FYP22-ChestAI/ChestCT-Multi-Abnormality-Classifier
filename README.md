@@ -91,7 +91,7 @@ scripts/model/                    encode_volumes.py, check_encoder.py, train_mil
                                   summarize_experiments.py, explain_volume.py
 tests/preprocessing/, tests/model/  pytest, synthetic data and fake backends: no download or network needed
 notebooks/                        Colab notebooks for trying the pipeline on a small sample; encoder_embeddings_report,
-                                  mil_training_report, evidence_viewer
+                                  experiments_report, evidence_viewer
 ```
 
 ## Setup notes

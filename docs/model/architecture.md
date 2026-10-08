@@ -51,7 +51,7 @@ src/ct_model/
   utils/                      device.py, seed.py
 scripts/model/                encode_volumes.py, check_encoder.py, train_mil.py, evaluate_mil.py,
                               summarize_experiments.py, explain_volume.py
-notebooks/                    encoder_embeddings_report, mil_training_report, evidence_viewer
+notebooks/                    encoder_embeddings_report, experiments_report, evidence_viewer
 tests/model/                  pytest, synthetic data and a tiny random ViT: no download, no GPU
 outputs/experiments/          (git-ignored) every training run, its evaluations, and the two ledgers
 ```
