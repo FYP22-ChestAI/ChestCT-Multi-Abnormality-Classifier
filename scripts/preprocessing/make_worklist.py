@@ -51,8 +51,7 @@ from ct_preprocessing.runs import Run, auto_run_name, check_run_name, get_run, n
 SURVEY_RUN = "kernel-survey"
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--source", default="ctrate", help="a CT-RATE-type source in the config (default: ctrate)")
@@ -68,7 +67,12 @@ def main() -> int:
     ap.add_argument("--val-patients", type=int, default=None, help="with --from-run: patients drawn from the parent's val split")
     ap.add_argument("--survey", type=int, default=None, metavar="N", help="a kernel-survey run: N scans per (manufacturer, kernel) pair")
     ap.add_argument("--refresh-metadata", action="store_true", help="download the metadata and label CSVs again")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     source_cfg = cfg.source(args.source)

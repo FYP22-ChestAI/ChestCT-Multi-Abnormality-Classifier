@@ -44,8 +44,7 @@ from ct_preprocessing.runs import DEFAULT_ARCHIVE_RUN, resolve_run
 from ct_preprocessing.manifest import CTRATE_BUILDER
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--source", required=True, help="a source name from the config (ctrate, nhrd_local, ...)")
@@ -61,7 +60,12 @@ def main() -> int:
     ap.add_argument("--allow-new-settings", action="store_true", help="let changed preprocessing settings replace the cache's recorded ones")
     ap.add_argument("--dry-run", action="store_true", help="list the pending chunks and exit")
     ap.add_argument("--status", action="store_true", help="print progress and exit")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     source_cfg = cfg.source(args.source)

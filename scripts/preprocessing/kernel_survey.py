@@ -30,13 +30,17 @@ from ct_preprocessing.runs import resolve_run
 AGREE = 0.8  # share of pairs a kernel must win (or lose) to count as clearly sharp (or soft)
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--source", default="ctrate", help="a CT-RATE-type source (default: ctrate)")
     ap.add_argument("--run", default="kernel-survey", help="the survey run (default: kernel-survey)")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     run = resolve_run(cfg.paths, args.source, args.run)
