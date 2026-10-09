@@ -36,8 +36,7 @@ from ct_preprocessing.ingest.splits import SPLITS, InsufficientPatients, apply_s
 from ct_preprocessing.runs import resolve_run
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--source", required=True, help="the source of the run to split (ctrate, nhrd_local, ...)")
@@ -47,7 +46,12 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=None, help="override the draw seed")
     ap.add_argument("--skip-qc", action="store_true", help="split every ingested volume without reading qc_report.csv")
     ap.add_argument("--dry-run", action="store_true", help="show the result without writing anything")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     run = resolve_run(cfg.paths, args.source, args.run)

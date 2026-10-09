@@ -27,8 +27,7 @@ from ct_preprocessing.quality import check_volume, save_montage
 from ct_preprocessing.runs import resolve_run
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument(
@@ -37,7 +36,12 @@ def main() -> int:
     )
     ap.add_argument("--source", required=True, help="the source of the run to check")
     ap.add_argument("--run", default=None, help="the run to check (default: the only one)")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     run = resolve_run(cfg.paths, args.source, args.run)

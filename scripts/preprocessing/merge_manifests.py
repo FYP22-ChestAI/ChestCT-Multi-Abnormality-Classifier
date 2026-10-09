@@ -59,15 +59,19 @@ def _labels_for(cfg, source_name, source_cfg, labels_file):
     return frame.rename(columns={frame.columns[0]: key}), key, key
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--source", required=True, help="the source of the run to merge (ctrate, nhrd_local, ...)")
     ap.add_argument("--run", default=None, help="the run to merge (default: the only one)")
     ap.add_argument("--labels-file", default=None, help="a local labels CSV, instead of reading it from the source")
     ap.add_argument("--patients-file", default=None, help="checklist of patient folders on the source disk, to report missing ones")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     source_cfg = cfg.source(args.source)

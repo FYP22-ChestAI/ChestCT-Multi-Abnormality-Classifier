@@ -25,15 +25,19 @@ from ct_preprocessing.config import load_config
 from ct_preprocessing.kernels import CLASSES, draft_class, normalize_kernel
 
 
-@friendly_errors
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_arg(ap)
     ap.add_argument("--metadata", default=None, help="CT-RATE train metadata CSV (default: <metadata_dir>/train_metadata.csv)")
     ap.add_argument("--out", default=None, help="where to write the table (default: paths.kernel_table)")
     ap.add_argument("--add", action="append", default=[], metavar="MANUFACTURER:KERNEL:CLASS", help="an extra pair, e.g. TOSHIBA:FC81:sharp")
     ap.add_argument("--force", action="store_true", help="overwrite an existing table (it may hold reviewed changes)")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    args = build_parser().parse_args()
 
     cfg = load_config(args.config)
     metadata = Path(args.metadata or Path(cfg.paths.metadata_dir) / "train_metadata.csv")

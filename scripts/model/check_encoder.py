@@ -27,9 +27,7 @@ from ct_model.data.volumes import load_run_manifest, select_volumes
 from ct_model.utils.log import stream_logs
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=DEFAULT_ENCODE_CONFIG)
     ap.add_argument("--encoder")
@@ -40,7 +38,13 @@ def main() -> int:
     ap.add_argument("--amp-dtype", choices=["auto", "bfloat16", "float16", "float32"])
     ap.add_argument("--slice-batch-size", type=int)
     ap.add_argument("--max-slices", type=int, default=64, help="slices to encode, evenly spread (0 = the whole volume)")
-    args = ap.parse_args()
+    return ap
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
 
     import torch
 
