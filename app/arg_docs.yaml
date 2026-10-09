@@ -1,0 +1,263 @@
+# Plain-language labels and ⓘ tooltips for the UI's fields.
+#
+# Keys are argparse dest names (the flag without "--", with "_" for "-": --slice-batch-size -> slice_batch_size).
+# `common` applies to every script; `scripts.<key>` (the key in app/registry.py) overrides it for one script.
+# A field missing here still shows up: its label comes from the flag and its tooltip from the script's help=.
+# Tooltips are Markdown. The default value and the config it comes from are added automatically.
+
+common:
+  config:
+    label: Config file
+    help: The YAML file that holds this script's defaults. Change it only to try a different settings file.
+  source:
+    label: Data source
+    help: "Which dataset: `ctrate` (public CT-RATE, NIfTI from Hugging Face) or `nhrd_local` (hospital DICOM archives)."
+  run:
+    label: Run
+    help: >-
+      A run is one planned set of volumes, stored in `data/runs/<source>/<run>/` (worklist, manifest, QC report).
+      Leave it empty when the source has only one run.
+  device:
+    label: Device
+    help: "`auto` uses the GPU when there is one, otherwise the CPU. Pick `cpu` to keep the GPU free."
+  seed:
+    label: Random seed
+    help: Fixes the random choices so a run can be repeated exactly. A different seed gives another, equally valid draw.
+  dry_run:
+    label: Dry run (write nothing)
+    help: Only show what would happen. Nothing is written or changed. A safe first step.
+  splits:
+    label: Splits
+    help: Which patient-level splits to include (train, val, test).
+  kernel_classes:
+    label: Kernel classes
+    help: >-
+      Reconstruction kernel: `sharp` (lung / high-resolution), `soft` (mediastinal / standard), `other`.
+      Empty = every kernel class the run holds.
+  encoder:
+    label: Encoder (backbone)
+    help: "The 2D slice encoder, one file in `configs/model/encoders/`. Each encoder gets its own embedding store."
+  amp_dtype:
+    label: Mixed precision
+    help: >-
+      Number format used on the GPU. `auto` picks bfloat16 when the GPU supports it (faster, less memory), else float32.
+  slice_batch_size:
+    label: Slices per batch
+    help: >-
+      How many slices go through the encoder at once. Bigger is faster but needs more GPU memory.
+      It halves itself automatically on an out-of-memory error.
+  num_workers:
+    label: Data loader workers
+    help: Background processes that read volumes from the cache while the GPU works.
+  min_free_gb:
+    label: Minimum free disk (GB)
+    help: The script stops cleanly (keeping finished work) when free disk drops below this.
+  limit:
+    label: Volume limit
+    help: Process at most this many volumes. Handy for a quick smoke test. Empty = all.
+  experiment_dir:
+    label: Trained run folder
+    help: "A finished training run, `outputs/experiments/<name>/<config hash>/seed<k>`. Newest first."
+  output_dir:
+    label: Output folder
+    help: Where experiment results are written.
+
+scripts:
+  make-worklist:
+    name:
+      label: New run name
+      help: "Name of the run folder to create. Empty = `train-<kernel>` (or `kernel-survey`). Runs are never overwritten."
+    train_kernel:
+      label: Train kernel
+      help: "Which reconstruction of each TRAIN scan to take: `sharp` (lung) or `soft` (mediastinal). The test pool always keeps both."
+    chunk_size:
+      label: Volumes per chunk
+      help: Volumes fetched, preprocessed and cleaned up together by ingest.
+    max_train_patients:
+      label: Max train patients
+      help: Cap the train pool, e.g. when the calibration run shows the cache will not fit. Empty = no cap.
+    max_test_patients:
+      label: Max test patients
+      help: Cap the test pool. Only for small pilot runs. Empty = keep it whole.
+    max_combined_gb:
+      label: Max resample memory (GB)
+      help: Skip TRAIN volumes that would need more memory than this to resample. Empty = no limit.
+    seed:
+      label: Patient shuffle seed
+    from_run:
+      label: Subset of run
+      help: Build the new run from patients an existing (already split) run holds. Each patient keeps its split.
+    train_patients:
+      label: Train patients (with subset)
+      help: "With *Subset of run*: how many patients to draw from the parent's train split."
+    val_patients:
+      label: Val patients (with subset)
+      help: "With *Subset of run*: how many patients to draw from the parent's val split."
+    survey:
+      label: Kernel survey size
+      help: Make a small kernel-survey run instead, with N scans per (manufacturer, kernel) pair.
+    refresh_metadata:
+      label: Re-download metadata
+      help: Download CT-RATE's metadata and label CSVs again.
+
+  ingest:
+    max_chunks:
+      label: Max chunks
+      help: Stop after this many chunks. Use **1** for the first calibration run. Empty = all pending chunks.
+    chunk:
+      label: Only this chunk
+      help: Process just one chunk id.
+    workers:
+      label: Preprocessing workers
+      help: Parallel preprocessing processes. Use 1 when the device is a GPU.
+    device:
+      label: Preprocessing device
+      help: "`cpu`, `cuda` or `auto`, for resampling. With `cuda`, set workers to 1."
+    drive_remote:
+      label: Archive location
+      help: "Archive sources (NHRD): an rclone remote such as `gdrive:nhrd_raw`, or a plain folder path."
+    max_consecutive_failures:
+      label: Stop after N failed chunks in a row
+      help: Several failures in a row usually mean a network or login problem, so it stops.
+    retry_failed:
+      label: Retry failed chunks
+      help: Re-run chunks that finished with failed volumes.
+    allow_new_settings:
+      label: Allow new preprocessing settings
+      help: >-
+        The cache remembers the settings that built it. Tick this only if you changed `preprocess:` in the config on purpose.
+        It lets the new settings replace the recorded ones.
+    dry_run:
+      label: Dry run (list pending chunks)
+    status:
+      label: Show progress only
+      help: Print how far the run is and exit.
+
+  merge-manifests:
+    labels_file:
+      label: Local labels CSV
+      help: Use this labels file instead of reading it from the source.
+    patients_file:
+      label: Patient checklist file
+      help: One patient folder name per line (from the original disk), to report patients that never arrived.
+
+  qc-report:
+    montage_every:
+      label: Montage every N volumes
+      help: Save a montage image for 1 in every N volumes, plus every volume that fails a check.
+
+  assign-splits:
+    n_val_patients:
+      label: Validation patients
+    n_test_patients:
+      label: Test patients
+      help: Only for sources without an official test set (NHRD). CT-RATE's test set is its official valid pool.
+    seed:
+      label: Draw seed
+    skip_qc:
+      label: Ignore QC report
+      help: Split every ingested volume without reading qc_report.csv.
+    dry_run:
+      label: Dry run (show the split, write nothing)
+      help: "Splits are frozen once written: **check with a dry run first.**"
+
+  make-kernel-table:
+    metadata:
+      label: Metadata CSV
+    out:
+      label: Output table
+    add:
+      label: Extra pairs
+      help: "One per line, `MANUFACTURER:KERNEL:CLASS`, e.g. `TOSHIBA:FC81:sharp`."
+    force:
+      label: Overwrite existing table
+      help: The existing table may contain reviewed changes. Overwrite only on purpose.
+
+  check-encoder:
+    volume_id:
+      label: Volume id
+      help: Which cached volume to test on. Empty = the first selected volume of the run.
+    max_slices:
+      label: Slices to encode
+      help: Evenly spread slices to encode for the test. 0 = the whole volume.
+
+  train-mil:
+    experiment:
+      label: Experiment
+      help: "An experiment file in `configs/model/experiments/`. It defines the model and every default below."
+    run:
+      label: Data run
+    loss:
+      label: Loss function
+      help: >-
+        `bce` binary cross-entropy · `weighted_bce` positives weighted by train prevalence · `asl` asymmetric loss.
+        Choosing one here resets its parameters to their defaults.
+    lr:
+      label: Learning rate
+      help: Peak learning rate (AdamW). Linear warm-up first, then cosine decay to 0 at max epochs.
+    weight_decay:
+      label: Weight decay
+      help: AdamW weight decay, applied to weight matrices only.
+    batch_size:
+      label: Batch size (volumes)
+      help: Volumes per optimisation step.
+    max_epochs:
+      label: Max epochs
+      help: The most epochs training can run. Early stopping (patience) usually ends it sooner.
+    patience:
+      label: Patience (epochs)
+      help: >-
+        **Early stopping.** Training stops after this many epochs **in a row** without a better validation macro AUROC.
+        The checkpoint from the best epoch is kept. Example: patience 15 with the best epoch at 9 means training stops after epoch 24.
+        (Nothing to do with patients.)
+    device:
+      label: Device
+
+  evaluate-mil:
+    split:
+      label: Split to evaluate
+      help: Normally `test`, **once**, after every choice was made on val.
+    source:
+      label: Data source
+      help: Default = the source the experiment was trained on.
+    run:
+      label: Data run
+      help: Default = the run it was trained on. Pick another run to test on other data without retraining.
+    bootstrap:
+      label: Bootstrap resamples
+      help: Resamples (by patient) for the 95% confidence intervals. 0 = no CIs.
+    min_group:
+      label: Minimum group size
+      help: Subgroups (kernel class, scanner) smaller than this are flagged too small and get no CI.
+    overwrite:
+      label: Overwrite existing evaluation
+      help: An evaluation that already exists is refused unless this is ticked.
+
+  summarize-experiments:
+    split:
+      label: Results from split
+      help: "`val` (training ledger, index.csv) or `test` (evaluations.csv)."
+    name:
+      label: Only experiment
+      help: Limit to one experiment name. Empty = all.
+    output_dir:
+      label: Experiments folder
+
+  explain-volume:
+    volume_id:
+      label: Volume id
+      help: A volume the run has predictions for.
+    labels:
+      label: Findings to explain
+      help: Empty = the findings predicted positive at the val thresholds.
+    top_k:
+      label: Top slices
+      help: How many highest-contribution slices to show per finding.
+    heatmaps:
+      label: Grad-CAM heatmaps
+      help: Also compute in-slice heatmaps. This re-encodes the top slices, so use a GPU.
+    min_cosine:
+      label: Min re-encode agreement
+      help: Cosine similarity needed between re-encoded and stored embeddings before heatmaps are trusted.
+    run:
+      label: Data run
