@@ -56,15 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-@friendly_errors
-def main() -> int:
-    stream_logs()  # progress lines reach | tee / log files as they happen
-    args = build_parser().parse_args()
+def settings_from_args(args: argparse.Namespace):
+    """The effective settings (config defaults + this command's overrides), the data config and the encoder
+    config. Also used by the UI's pipeline status."""
     cfg = load_stage2_config(args.config)
     sel, enc = cfg.selection, cfg.encode
     data_cfg = load_config(cfg.data_config)
     enc_cfg = load_encoder_config(pick(args.encoder, cfg.encoder))
-
     settings = {
         "encoder": enc_cfg.name, "source": pick(args.source, sel.source), "run": pick(args.run, sel.run),
         "splits": tuple(pick(args.splits, sel.splits)), "qc_passed_only": sel.qc_passed_only,
@@ -75,6 +73,14 @@ def main() -> int:
         "min_free_gb": pick(args.min_free_gb, enc.min_free_gb), "limit": pick(args.limit, enc.limit),
         "embeddings_dir": enc.embeddings_dir,
     }
+    return settings, data_cfg, enc_cfg
+
+
+@friendly_errors
+def main() -> int:
+    stream_logs()  # progress lines reach | tee / log files as they happen
+    args = build_parser().parse_args()
+    settings, data_cfg, enc_cfg = settings_from_args(args)
     run, manifest = load_run_manifest(data_cfg, settings["source"], settings["run"])
     settings["run"] = run.name
     show_settings("encode_volumes", settings)

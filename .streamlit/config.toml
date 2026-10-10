@@ -1,0 +1,36 @@
+# Streamlit settings for the control panel (streamlit run app/main.py).
+[server]
+headless = true            # no browser pop-up on the server; open the URL (or an SSH tunnel to it) yourself
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"     # the ⋮ menu with Settings -> Light / Dark / Use system setting; no developer options
+
+# Shared by both themes
+[theme]
+baseRadius = "medium"
+showSidebarBorder = true
+
+# Light and dark palettes: the viewer switches between them (⋮ -> Settings), or follows the system setting
+[theme.light]
+primaryColor = "#2563eb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f5f9"
+textColor = "#0f172a"
+codeBackgroundColor = "#f8fafc"
+
+[theme.light.sidebar]
+backgroundColor = "#f8fafc"
+
+[theme.dark]
+primaryColor = "#60a5fa"
+backgroundColor = "#0b1220"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#e2e8f0"
+codeBackgroundColor = "#111827"
+
+[theme.dark.sidebar]
+backgroundColor = "#0f172a"
