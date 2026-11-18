@@ -1,0 +1,60 @@
+# Phase 2 (step 5 of the pre-slice-selection plan): LoRA adaptation of DALE-CT-2S against the sharp / soft kernel gap.
+#
+#   python scripts/model/adapt_encoder.py --adapt-config lora_dale2s_kernel [--init-from <phase-1 run>] [--seed 1]
+#
+# Trains LoRA in the last 12 of DALE's 24 blocks, end to end from the HU cache on k = 48 slices per volume, with
+# the volume labels (BCE) plus two label-free terms: the aligned slices of a scan's sharp and soft reconstructions
+# should embed alike, and predict alike. Scans with one kernel get a blurred (sharp) / sharpened (soft) copy with
+# probability augment_prob. The best epoch on val macro AUROC is kept; the frozen start is epoch 0 in metrics.csv.
+# Every value is a default; adapt_encoder.py arguments override some. See src/ct_model/adapt/.
+
+name: lora_dale2s_kernel
+encoder: dale_ct_2s                       # the base encoder (configs/model/encoders/dale_ct_2s.yaml)
+init_from: null                           # a phase-1 run folder (FeatureNorm + aggregator + head); pass --init-from
+data_config: configs/preprocessing.yaml
+encode_config: configs/model/encode.yaml
+
+data:
+  source: ctrate
+  run: train-sharp-5800+train-soft-1000   # ~1000 train scans have both kernels (pairs); val holds both too
+  kernel_classes: null                    # sharp and soft
+  labels: null                            # the labels of init_from
+  qc_passed_only: true
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [qkv, proj]             # attention input / output projections
+  last_n_blocks: 12                       # blocks 12-23 adapt; 0-11 run without gradients (memory, speed)
+
+slices:
+  train_k: 48                             # random_k: one slice per equal segment, head to foot
+  val_k: 48                               # uniform_k
+  max_offset: 2                           # z alignment search between two reconstructions of a scan
+
+consistency:
+  pairs: true
+  embedding_weight: 1.0                   # 1 - cos(aligned slices of the two views), after FeatureNorm
+  prediction_weight: 0.5                  # symmetric KL of the two views' label probabilities
+  augment_prob: 0.25
+  blur_sigma: [0.5, 1.2]                  # pixels (0.75 mm cache spacing before the 224 resize)
+  sharpen_amount: [0.5, 1.5]
+
+optim:
+  lr_lora: 1.0e-4
+  lr_head: 2.0e-5
+  weight_decay: 1.0e-2
+  scans_per_step: 2                       # per forward / backward pass (1-2 volumes each)
+  accumulation: 8                         # -> ~16 scans per optimiser step
+  epochs: 6
+  warmup_steps: 100
+  grad_clip: 1.0
+  scans_per_epoch: null                   # all ~5800 train scans
+  monitor: val_macro_auroc
+  checkpoint: true
+
+seed: 0
+device: auto
+amp_dtype: bfloat16
+output_dir: outputs/adapters

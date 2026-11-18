@@ -3,7 +3,7 @@ its baseline numbers.
 
 Intended design: Q learnable queries (e.g. one per abnormality label, Q = 18) cross-attend over the
 slice embeddings (nn.MultiheadAttention with ``key_padding_mask = ~mask``), optionally after a small
-transformer encoder over slices with a 1D positional encoding of the slice position (head -> foot).
+transformer encoder over slices with a 1D positional encoding of the slice position (index 0 = foot end, see the data contract).
 Output AggregatorOutput(pooled=(B, Q, out_dim), attention=(B, Q, N)) with ``per_label = True``, so the
 linear head maps each query embedding to its own label's logit. If anything transforms the pooled
 vectors after attention, set ``linear_pooling = False`` (slice evidence then needs a gradient method).

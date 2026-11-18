@@ -7,6 +7,8 @@ Uses the best checkpoint and the per-label thresholds chosen on val at training 
 <run dir>/eval/<source>__<run>__<split>/ (predictions, per-label and summary metrics: overall, per
 kernel class, per scanner, with patient-level bootstrap 95 % CIs) and adds a row to
 outputs/experiments/evaluations.csv. An evaluation that already exists is refused (--overwrite redoes it).
+Then it writes the clinical report of the evaluation (<run dir>/clinical/..., settings in
+configs/model/clinical.yaml; --no-clinical skips it; see scripts/model/clinical_report.py).
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--min-group", type=int, default=100, help="groups smaller than this are flagged too_small, no CI")
     ap.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--no-clinical", action="store_true", help="skip the clinical report (scripts/model/clinical_report.py)")
     return ap
 
 
@@ -42,7 +45,7 @@ def main() -> int:
     result = evaluate_experiment(
         args.experiment_dir, split=args.split, source=args.source, run=args.run,
         kernel_classes=tuple(args.kernel_classes) if args.kernel_classes else None, n_boot=args.bootstrap,
-        min_group=args.min_group, device=args.device, overwrite=args.overwrite,
+        min_group=args.min_group, device=args.device, overwrite=args.overwrite, clinical=not args.no_clinical,
     )
     cols = [c for c in ("group_by", "group", "n_volumes", "macro_auroc", "macro_auroc_ci_low", "macro_auroc_ci_high",
                         "macro_auprc", "macro_f1", "too_small") if c in result.summary.columns]

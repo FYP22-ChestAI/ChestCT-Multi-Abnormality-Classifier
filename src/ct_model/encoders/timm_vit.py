@@ -52,7 +52,12 @@ class TimmViTEncoder(SliceEncoder):
             )
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
-        tokens = self.model.forward_features(x)  # (K, prefix + patches, D)
+        return self.pool(self.model.forward_features(x))  # tokens: (K, prefix + patches, D)
+
+    def pool(self, tokens: torch.Tensor) -> torch.Tensor:
+        """(K, T, D) tokens after the final norm -> (K, embed_dim), by ``cfg.pooling``. Phase-2 training
+        (ct_model.adapt) runs its own forward through the blocks and pools with this, so training and
+        encoding cannot drift apart."""
         if tokens.ndim != 3:
             raise RuntimeError(f"{self.cfg.arch}.forward_features returned shape {tuple(tokens.shape)}, expected (K, T, D)")
         cls = tokens[:, 0]

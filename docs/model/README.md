@@ -112,7 +112,7 @@ Writes nothing. Selection (splits, QC, kernel classes) comes from encode.yaml.
 | `--device D` | `auto` `cuda` `cpu` | `encode.device` | as above |
 | `--amp-dtype T` | `auto` `bfloat16` `float16` `float32` | `encode.amp_dtype` | as above |
 | `--slice-batch-size N` | integer ≥ 1 | `encode.slice_batch_size` | the batch size to measure speed and peak VRAM with |
-| `--max-slices N` | integer ≥ 0 | 64 | slices to encode, evenly spread head to foot (0 = the whole volume) |
+| `--max-slices N` | integer ≥ 0 | 64 | slices to encode, evenly spread along the body axis (0 = the whole volume) |
 
 ## What gets selected
 
@@ -218,8 +218,70 @@ python scripts/model/evaluate_mil.py --experiment-dir outputs/experiments/abmil_
 - **Where:** results go to `eval/ctrate__train-sharp-5800__test/` in the run folder, plus a row in
   `outputs/experiments/evaluations.csv`.
 - **Repeats are refused.** `--overwrite` redoes an evaluation deliberately.
+- **Then the clinical report** of that evaluation is written (next section). `--no-clinical` skips it.
 
 `summarize_experiments.py --split test` compares the evaluated runs.
+
+### 3b. Clinical evaluation: is it usable? (every phase)
+
+AUROC says how well scans are *ranked*. The clinical report says what a reader of the output would get, so every
+phase (frozen MIL, LoRA, slice selection, NHRD) is judged on the same yardstick. It reads **only saved
+predictions** (`predictions_val.csv` and `eval/<...>/predictions.csv`), never a model: anything that writes those
+files is scored the same way.
+
+```bash
+python scripts/model/clinical_report.py --experiment-dir outputs/experiments/abmil_dale2s/<hash8> --per-seed
+```
+- **A config folder** (`<name>/<hash8>`) scores the **seed ensemble** (probabilities averaged over its evaluated
+  seeds) into `<hash8>/ensemble/clinical/<eval>/`; `--per-seed` adds every seed's own report. A run folder
+  (`.../seed<k>`) scores that run alone into `seed<k>/clinical/<eval>/`. `evaluate_mil.py` already writes the run's
+  own report, so this is for ensembles, older evaluations, and re-scoring after changing the settings.
+- **Chosen on val, applied unchanged:** per label, a calibration (Platt) and two thresholds:
+  - **present** when p ≥ the *report* threshold (val specificity ≥ 0.95);
+  - **absent** when p < the *rule-out* threshold (val sensitivity ≥ 0.90);
+  - **uncertain** in between: a human looks.
+
+  The phase-1 max-F1 threshold is kept as `maxf1_*` for comparison.
+- **What it reports:**
+  - **per scan:** false labels and missed findings, exact match, normal scans flagged, uncertain labels;
+  - **per label:** AUROC with patient-bootstrap CI, AUPRC, sensitivity / specificity / PPV / NPV at both
+    thresholds, sensitivity at fixed specificities, calibration error before and after calibration, Brier score,
+    decision-curve net benefit;
+  - **kernel robustness:** the same scan reconstructed sharp and soft (test holds both): how often a decision
+    changes, and the soft − sharp sensitivity gap;
+  - everything also per kernel class and per scanner.
+- **A gate per label:** **supported** (passes every rule), **review** (fails only calibration or robustness),
+  **not supported** (fails discrimination: AUROC CI low, or sensitivity at the report threshold). Rules and
+  targets are in `configs/model/clinical.yaml`; change them there, never in code.
+- **Where:**
+  - in the report folder: `scorecard.json` (headline + label status: read it first), `per_label.csv`,
+    `summary.csv`, `per_scan.csv`, `paired_kernel.csv`, `paired_scans.csv`, `gate.csv`,
+    `operating_points.json`, `predictions_clinical.csv` (calibrated probabilities and the 3-state output);
+  - one row per report in `outputs/experiments/clinical.csv`.
+
+  A report is derived and deterministic, so running it again rewrites it.
+- **Look at it:** `notebooks/clinical_report.ipynb` compares every config's scorecard and label status, both rules,
+  the kernel robustness, calibration (sharp vs soft), decision curves, false labels per scan, and the gate for
+  moving on to slice selection.
+
+**Encoder diagnostics** (also every phase, per embedding store): section 7 of
+`notebooks/encoder_embeddings_report.ipynb`, from `ct_model.embeddings.diagnostics`.
+- **Kernel probe:** how readable sharp vs soft is from the mean embedding (frozen DALE: 0.9999; adaptation
+  should push it down).
+- **Linear probe:** macro AUROC of a logistic regression on the mean embedding (frozen DALE: 0.769), the floor
+  any aggregator must beat.
+
+### Several runs in one experiment
+
+`data.run` can join runs of one source with `+`, e.g. `train-sharp-5800+train-soft-1000`
+(`configs/model/experiments/abmil_perlabel_mixed_dale2s.yaml`).
+- **How they are joined:** the manifests are concatenated; a volume listed by several runs (the shared test pool)
+  is kept once.
+- **No leakage:** a patient must have the same split in every run, which holds for a run built with
+  `make_worklist.py --from-run`. Otherwise it is an error.
+- **Config hash:** covers every part's manifest.
+
+The same name works for `encode_volumes.py --run` and `evaluate_mil.py --run`.
 
 ### 4. Look at it
 
@@ -289,6 +351,18 @@ Settable only in the YAML:
 | `--min-group N` | ≥ 1 | 100 | smaller groups are flagged `too_small` and get no CI |
 | `--device D` | `auto` `cuda` `cpu` | `auto` | where to predict |
 | `--overwrite` | flag | off | redo an existing evaluation |
+| `--no-clinical` | flag | off | skip the clinical report written after the evaluation |
+
+#### `scripts/model/clinical_report.py`
+
+| Argument | Values | Default | What it does |
+|---|---|---|---|
+| `--experiment-dir DIR` | a run folder, or a config folder | required | one run, or the seed ensemble of a config |
+| `--split S` | `train` `val` `test` | `test` | which evaluation to report |
+| `--source NAME` / `--run NAME` | a source / a run | the experiment's | the evaluation of another source or run |
+| `--clinical-config PATH` | YAML | `configs/model/clinical.yaml` | operating-point targets, calibration, gate rules |
+| `--per-seed` | flag | off | with a config folder, also every seed's own report |
+| `--bootstrap N` | ≥ 0 | from the YAML (1000) | patient resamples for the per-label AUROC CIs |
 
 #### `scripts/model/summarize_experiments.py`
 
@@ -310,6 +384,122 @@ Settable only in the YAML:
 | `--min-cosine X` | 0-1 | 0.99 | required agreement between re-encoded and stored embedding |
 | `--run NAME` | a run | the experiment's | the run holding the volume |
 | `--device D` | `auto` `cuda` `cpu` | `auto` | where to run |
+
+## Phase 2: adapt the encoder (LoRA)
+
+The frozen encoder limits results:
+- a linear probe on its mean embedding reaches 0.769, and every aggregator reaches about 0.80;
+- the reconstruction kernel is readable from its embeddings at AUROC 0.9999.
+
+Phase 2 trains LoRA adapters inside the encoder against this. Details are in `src/ct_model/adapt/` and
+`src/ct_model/encoders/lora.py`.
+
+```bash
+python scripts/model/adapt_encoder.py --adapt-config lora_dale2s_kernel --init-from outputs/experiments/<name>/<hash8>/seed0
+```
+
+**What trains.**
+- LoRA (r = 8) on `attn.qkv` and `attn.proj` of the last 12 of the 24 blocks. That is 0.6 M parameters; the
+  ViT-L weights stay frozen.
+- The aggregator and head, initialised from `--init-from`. Give a phase-1 run trained on the same data run.
+
+**How a volume label trains the encoder.** No slice labels are needed:
+- The volume loss backpropagates through the attention to every sampled slice.
+- 48 slices per volume go through the encoder with gradients (`random_k`, one per segment along the body axis).
+- The first 12 blocks run without gradients and the adapted ones are checkpointed, so it fits in 16 GB.
+
+**Kernel consistency.** Training items are *scans*: a scan with a sharp and a soft reconstruction (about
+1,000 in `train-sharp-5800+train-soft-1000`) brings both. Their slices are aligned in z by the per-slice
+mean-HU profile. Two label-free terms are added to the BCE:
+- the aligned slices should embed alike: 1 − cosine after FeatureNorm (frozen DALE: 0.61, so the loss is
+  about 0.39);
+- the two volumes should predict alike: symmetric KL.
+
+A one-kernel scan gets a blurred (sharp) or sharpened (soft) copy of the same slices with probability
+`augment_prob`.
+
+**Selection.** Each epoch is scored on val: 48 uniform slices, both kernels.
+- Logged in `metrics.csv`: macro AUROC (overall, sharp, soft), val loss, and for the val pairs the slice
+  cosine, |Δp| and decision flips at 0.5. Epoch 0 is the frozen start.
+- The best epoch on `optim.monitor` is kept.
+
+**Output.** `outputs/adapters/<name>/<hash8>/seed<k>/`:
+- `adapter.safetensors`;
+- `encoder.yaml`: the base encoder plus `lora.adapter`, a new encoder with its own fingerprint and store;
+- `experiment.yaml`: the init run's experiment on that encoder;
+- `outputs/adapters/index.csv`: the ledger.
+
+The same command resumes an interrupted run.
+
+**Then, with the adapted encoder frozen again,** the usual pipeline: the head trains on full bags, so
+training and test see the same bag size.
+
+```bash
+python scripts/model/encode_volumes.py --encoder outputs/adapters/<name>/<hash8>/seed0/encoder.yaml --run train-sharp-5800+train-soft-1000
+```
+```bash
+python scripts/model/train_mil.py --experiment outputs/adapters/<name>/<hash8>/seed0/experiment.yaml --seed 0
+```
+
+Then evaluate each seed, run the clinical report of the ensemble, and run section 7 of the encoder
+notebook with `ENCODER` set to that `encoder.yaml`. Section 8 of `clinical_report.ipynb` decides whether
+it passes the gate for slice selection.
+
+**Budget on the 4070 Ti (16 GB).**
+- About 6.8k volume views of 48 slices per epoch; the time per epoch is in the log.
+- Val takes a few minutes per epoch.
+- The adapted store takes about 80 minutes to encode.
+
+## Experiment tracking: MLflow / DagsHub
+
+`outputs/` stays the source of truth. `scripts/model/export_mlflow.py` publishes a shareable view of it to an
+MLflow server, for example the project's DagsHub repository.
+
+The export is idempotent: a run already on the server is recognised by its `ct.run_id` tag and skipped. Run it
+after every phase:
+
+```bash
+python scripts/model/export_mlflow.py --dry-run
+```
+```bash
+python scripts/model/export_mlflow.py
+```
+
+**Login.** Use the standard MLflow variables, set in your shell or in `~/.bashrc`. Never put them in the repo:
+- `MLFLOW_TRACKING_URI=https://dagshub.com/<user>/<repo>.mlflow`
+- `MLFLOW_TRACKING_USERNAME`
+- `MLFLOW_TRACKING_PASSWORD`, a DagsHub access token.
+
+**MLflow layout.**
+
+| MLflow experiment | MLflow runs | Source folder |
+|---|---|---|
+| one per experiment name | `<hash8>/seed<k>` | `outputs/experiments/<name>/<hash8>/seed<k>/` |
+| the same experiment | `<hash8>/ensemble` | the seed-ensemble clinical report |
+| `adapt/<name>` | one per LoRA run | `outputs/adapters/<name>/<hash8>/seed<k>/` |
+
+**Params:** the flattened config.
+
+**Metrics:**
+- the per-epoch curves;
+- final val metrics;
+- test metrics: `test.macro_auroc`, `test.macro_auroc.sharp`, `test.label.<finding>.auroc`;
+- the clinical headline: `clinical.test.report_fp_per_scan`, `clinical.test.paired_scans_with_flip`, ...;
+- an evaluation on another data run (e.g. NHRD) is keyed `<source>.<run>.<split>`.
+
+**Tags:** git commit, config hash, the label status (`clinical.test.supported`).
+
+**Artifacts:** configs, curves, evaluation and clinical tables, and the weights (`best.pt`; LoRA
+`adapter.safetensors` + `head.pt`).
+
+**Never exported:**
+- the HU cache and embedding stores;
+- resume checkpoints;
+- per-volume prediction files: they carry CT-RATE patient-level data and labels (CC BY-NC-SA). Only with
+  `--with-predictions`, and only to a private repository.
+
+`--refresh` re-sends runs after a new evaluation or clinical report. `--name` limits the export to one
+experiment.
 
 ## Evidence (optional)
 
@@ -337,7 +527,7 @@ volumes:
 **Limits.**
 - **Not a localisation:** this is what the model relied on, not a validated localisation of the
   finding.
-- **Slice numbers:** they are slices of the preprocessed volume (1.5 mm, head to foot, body-cropped),
+- **Slice numbers:** they are slices of the preprocessed volume (1.5 mm, foot to head, body-cropped),
   not original DICOM slice numbers.
 
 ## Troubleshooting

@@ -176,7 +176,7 @@ def train_experiment(cfg: ExperimentConfig, log: Callable[[str], None] = say) ->
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
-        torch.set_rng_state(state["torch_rng"])
+        torch.set_rng_state(state["torch_rng"].cpu())  # map_location put it on the GPU; the CPU generator needs a CPU tensor
         start_epoch, best_value, best_epoch, bad_epochs = state["epoch"], state["best_value"], state["best_epoch"], state["bad_epochs"]
         history = state["history"]
         log(f"resuming {rid} after epoch {start_epoch}")

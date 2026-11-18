@@ -108,7 +108,7 @@ def plot_label(ev: SliceEvidence, label: str, hu_volume: np.ndarray, heatmaps: l
     ax.bar(np.arange(len(contrib)), contrib, width=1.0, color=np.where(contrib >= 0, "tab:red", "tab:blue"))
     ax.scatter(top, contrib[top], color="black", zorder=3, s=12)
     ax.axhline(0, color="gray", lw=0.5)
-    ax.set_xlabel("slice (head -> foot, preprocessed volume)")
+    ax.set_xlabel("slice (foot -> head, preprocessed volume)")
     ax.set_ylabel("contribution to logit")
     thr = ev.thresholds[c]
     title = f"{label}: p = {ev.probs[c]:.3f}" + (f" (val threshold {thr:.3f} -> {'positive' if ev.predicted[c] else 'negative'})" if not np.isnan(thr) else "")

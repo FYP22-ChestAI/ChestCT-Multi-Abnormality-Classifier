@@ -167,14 +167,18 @@ def train_run_dir(argv: list[str]) -> Path | None:
     module = script_module("scripts/model/train_mil.py")
     cfg = module.experiment_from_args(module.build_parser().parse_args(argv))
     data_cfg = load_config(cfg.data_config)
+    from ct_model.data.volumes import RUN_JOIN, CombinedRun, manifest_sha256
+
     names = [cfg.data.run] if cfg.data.run else list_runs(data_cfg.paths, cfg.data.source)
     if len(names) != 1:
         return None
-    manifest = Run(data_cfg.paths, cfg.data.source, names[0]).manifest_path
-    if not manifest.is_file():
+    parts = tuple(Run(data_cfg.paths, cfg.data.source, n) for n in names[0].split(RUN_JOIN))  # "a+b": combined runs
+    if not all(r.manifest_path.is_file() for r in parts):
         return None
+    run = parts[0] if len(parts) == 1 else CombinedRun(cfg.data.source, names[0], parts)
+    sha = manifest_sha256(run, file_hash=lambda path: _sha256(str(path), Path(path).stat().st_mtime))
     store = load_encoder_config(cfg.encoder).store_name
-    return run_dir(cfg, config_hash(cfg, store, _sha256(str(manifest), manifest.stat().st_mtime)))
+    return run_dir(cfg, config_hash(cfg, store, sha))
 
 
 def train(argv: list[str]) -> Status:
@@ -204,6 +208,34 @@ def evaluate(argv: list[str]) -> Status:
         auroc = summary[summary.group_by == "all"].macro_auroc.iloc[0] if summary is not None and len(summary) else None
         return Status(DONE, f"evaluated on {args.split}" + (f": macro AUROC {auroc:.4f}" if auroc is not None else ""))
     return Status(TODO, f"evaluate on {args.split}" + (" (redo)" if out.is_dir() else ""))
+
+
+def clinical(argv: list[str]) -> Status:
+    """Done when the report exists for exactly the seeds evaluated now (and, with --per-seed, every seed's
+    own report), made with the current clinical settings."""
+    from ct_model.clinical.config import load_clinical_config
+    from ct_model.clinical.report import eval_name, is_run_dir, output_dir, seed_dirs
+
+    args = parse("scripts/model/clinical_report.py", argv)
+    folder = Path(args.experiment_dir)
+    runs = [folder] if is_run_dir(folder) else seed_dirs(folder)
+    if not runs:
+        return Status(BLOCKED, "after its training run")
+    name = eval_name(runs[0], args.split, args.source, args.run)
+    evaluated = [d for d in runs if (d / "eval" / name / "predictions.csv").is_file()]
+    if not evaluated:
+        return Status(BLOCKED, f"after the evaluation on {args.split}")
+    fingerprint = load_clinical_config(args.clinical_config).fingerprint()
+    card = _json(output_dir(folder, name) / "scorecard.json")
+    members = card.get("member_runs") or ([card["run_id"]] if card.get("run_id") else [])
+    wanted = [_json(d / "run_info.json").get("run_id") for d in evaluated]
+    stale = [d for d in (evaluated if args.per_seed and len(runs) > 1 else [])
+             if _json(output_dir(d, name) / "scorecard.json").get("clinical_config_fingerprint") != fingerprint]
+    if card and card.get("clinical_config_fingerprint") == fingerprint and (is_run_dir(folder) or members == wanted) and not stale:
+        h = card.get("headline", {})
+        return Status(DONE, f"{h.get('labels_supported', '?')} labels supported; "
+                            f"{h.get('report_fp_per_scan', float('nan')):.2f} false positives per scan")
+    return Status(TODO, f"report {len(evaluated)} evaluated seed(s) on {args.split}" + (" (redo)" if card else ""))
 
 
 def always(argv: list[str]) -> Status:

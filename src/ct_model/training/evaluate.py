@@ -11,6 +11,10 @@ A group with fewer than ``min_group`` volumes is still reported, flagged ``too_s
 It can also score another run of the same labels (a soft-kernel subset, NHRD) without retraining,
 as long as its volumes are in the same embedding store.
 
+Then, unless ``clinical=False``, it writes the run's clinical report from the saved predictions
+(ct_model.clinical: operating points chosen on val, false positives / missed findings per scan,
+sharp-vs-soft decision changes, calibration, per-label gate) into <run dir>/clinical/<source>__<run>__<split>/.
+
     <run dir>/eval/<source>__<run>__<split>/
         predictions.csv  metrics_summary.csv  metrics_per_label.csv  eval_info.json
     outputs/experiments/evaluations.csv      one row per evaluation (ledger)
@@ -61,7 +65,8 @@ def _group_rows(y, p, patients, names, thresholds, group_by, group, n_boot, seed
 
 def evaluate_experiment(exp_dir: str | Path, *, split: str = "test", source: str | None = None, run: str | None = None,
                         kernel_classes: tuple[str, ...] | None = None, n_boot: int = 1000, min_group: int = 100,
-                        device: str = "auto", overwrite: bool = False, log: Callable[[str], None] = say) -> EvalResult:
+                        device: str = "auto", overwrite: bool = False, clinical: bool = True,
+                        log: Callable[[str], None] = say) -> EvalResult:
     dev = resolve_device(device)
     trained = load_trained(exp_dir, device=dev)
     cfg, names = trained.cfg, trained.label_names
@@ -78,7 +83,8 @@ def evaluate_experiment(exp_dir: str | Path, *, split: str = "test", source: str
     probs, _ = predict(trained.model, dataset, dev)
     y = dataset.labels()
     preds = predictions_frame(dataset, probs, names)
-    extra = [c for c in GROUP_COLUMNS if c in data.manifest.columns and c != "kernel_class"]
+    # scan_id pairs the reconstructions of one scan (clinical report); the rest are reporting groups
+    extra = [c for c in (*GROUP_COLUMNS, "scan_id") if c in data.manifest.columns and c != "kernel_class"]
     if extra:
         preds = preds.merge(data.manifest[["volume_id", *extra]].drop_duplicates("volume_id"), on="volume_id", how="left")
     preds.to_csv(out / "predictions.csv", index=False, lineterminator="\n")
@@ -122,4 +128,9 @@ def evaluate_experiment(exp_dir: str | Path, *, split: str = "test", source: str
     log(f"macro AUROC {overall['macro_auroc']:.4f}"
         + (f" (95% CI {overall['macro_auroc_ci_low']:.4f}-{overall['macro_auroc_ci_high']:.4f})" if "macro_auroc_ci_low" in overall and pd.notna(overall.get("macro_auroc_ci_low")) else "")
         + f", macro AUPRC {overall['macro_auprc']:.4f}; results in {out}")
+    if clinical:
+        from ..clinical import clinical_report
+
+        log("clinical report (operating points chosen on val):")
+        clinical_report(exp_dir, split=split, source=data.run.source, run=data.run.name, log=log)
     return EvalResult(out, summary, per_label)

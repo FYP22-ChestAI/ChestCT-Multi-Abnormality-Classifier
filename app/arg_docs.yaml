@@ -232,6 +232,83 @@ scripts:
     overwrite:
       label: Overwrite existing evaluation
       help: An evaluation that already exists is refused unless this is ticked.
+    no_clinical:
+      label: Skip the clinical report
+      help: By default the evaluation ends with the run's clinical report (see the Clinical report page).
+
+  clinical-report:
+    experiment_dir:
+      label: Run or config folder
+      help: >-
+        A **config folder** (`outputs/experiments/<name>/<hash>`) scores the **seed ensemble**: the probabilities of
+        every seed that has this evaluation are averaged. A **run folder** (`.../seed<k>`) scores that run alone.
+    split:
+      label: Evaluation to report
+      help: The split of an existing evaluation (run Evaluate first). Operating points always come from val.
+    source:
+      label: Data source
+      help: Default = the source the experiment was trained on.
+    run:
+      label: Data run
+      help: Default = the run it was trained on (another run = an evaluation made with that run).
+    per_seed:
+      label: Also every seed's own report
+      help: With a config folder, also write each seed's report (evaluate already does this for new evaluations).
+    clinical_config:
+      label: Clinical settings
+      help: >-
+        `configs/model/clinical.yaml`: the target specificity of the "present" threshold and sensitivity of the
+        "absent" threshold, calibration, and the rules a label must pass to count as **supported**.
+    bootstrap:
+      label: Bootstrap resamples
+      help: Resamples (by patient) for the per-label AUROC confidence intervals. Empty = the settings file; 0 = none.
+
+  adapt-encoder:
+    adapt_config:
+      label: Adaptation config
+      help: A file in `configs/model/adapt/`: base encoder, LoRA size, slices per volume, consistency weights, optimiser.
+    init_from:
+      label: Start from (phase-1 run)
+      help: >-
+        A finished phase-1 run whose FeatureNorm, aggregator and head start the end-to-end model. Use one trained on the
+        same data run (e.g. the mixed sharp + soft experiment). Empty = the config's `init_from`.
+    run:
+      label: Data run
+      help: Default = the config's. Join runs with `+` (`train-sharp-5800+train-soft-1000`) so sharp / soft pairs exist.
+    seed:
+      label: Seed
+    epochs:
+      label: Epochs
+      help: Each epoch is every train scan once (about 30-60 min on the 4070 Ti); the best epoch on val is kept.
+    scans_per_epoch:
+      label: Scans per epoch
+      help: Cap for a quick try. Empty = every train scan.
+    workers:
+      label: Reader processes
+      help: DataLoader processes reading HU slices from the cache.
+
+  export-mlflow:
+    tracking_uri:
+      label: MLflow server
+      help: >-
+        Empty = `$MLFLOW_TRACKING_URI` of the shell that started Streamlit, e.g.
+        `https://dagshub.com/<user>/<repo>.mlflow`. The login comes from `$MLFLOW_TRACKING_USERNAME` /
+        `$MLFLOW_TRACKING_PASSWORD` (a DagsHub access token) -- never type a token into a field.
+    dry_run:
+      label: Dry run
+      help: List what would be exported; nothing is sent.
+    name:
+      label: Only experiment
+      help: One experiment or adapt-config name. Empty = everything under outputs/.
+    refresh:
+      label: Re-export existing runs
+      help: Delete and re-send runs the server already has (e.g. after a new evaluation or clinical report).
+    no_weights:
+      label: Without weights
+      help: Skip best.pt and LoRA adapter files.
+    with_predictions:
+      label: Include per-volume predictions
+      help: CT-RATE patient-level data and labels (CC BY-NC-SA). Only for a PRIVATE DagsHub repository.
 
   summarize-experiments:
     split:

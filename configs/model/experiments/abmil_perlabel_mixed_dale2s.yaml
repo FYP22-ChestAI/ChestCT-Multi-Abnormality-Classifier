@@ -1,0 +1,57 @@
+# Step 3 of the pre-slice-selection plan: the best phase-1 config (per-label ABMIL, BCE, 30 epochs --
+# da82a90e) trained on SHARP + SOFT reconstructions, with the encoder still frozen.
+#
+#   python scripts/model/train_mil.py --experiment abmil_perlabel_mixed_dale2s [--seed 1]
+#
+# data.run joins two runs with "+": train-sharp-5800 (one sharp reconstruction per scan) and train-soft-1000
+# (soft reconstructions of 800 train + 200 val patients of train-sharp-5800, built with make_worklist.py
+# --from-run, so every patient keeps its split). train_kernel_classes: null puts both kernels in train AND
+# val, so model selection, thresholds and calibration see soft scans too. It answers: does soft data alone
+# close the kernel gap, or must the encoder adapt (LoRA)? Compare its clinical report with da82a90e's.
+
+name: abmil_perlabel_mixed_dale2s
+data_config: configs/preprocessing.yaml   # cache_dir, runs_dir
+encode_config: configs/model/encode.yaml  # embeddings_dir
+encoder: dale_ct_2s                       # which embedding store (configs/model/encoders/dale_ct_2s.yaml)
+
+data:
+  source: ctrate
+  run: train-sharp-5800+train-soft-1000   # two runs, one manifest (ct_model.data.volumes.load_run_manifest)
+  train_kernel_classes: null              # train AND val take every kernel (sharp and soft)
+  labels: null                            # null = every label_* column of the manifest (18 for CT-RATE)
+  qc_passed_only: true
+  train_slice_sampler: {mode: all}
+  preload: true
+
+features:
+  standardize: true                       # per-dimension mean / std, fitted on TRAIN slices only (both kernels)
+
+aggregator:
+  type: abmil
+  hidden_dim: 256
+  attn_dim: 128
+  dropout: 0.25
+  branches: per_label
+
+head:
+  type: linear
+  dropout: 0.0
+head_prior_bias: true
+
+loss:
+  type: bce
+
+optim:
+  optimizer: adamw
+  lr: 2.0e-4
+  weight_decay: 1.0e-2
+  batch_size: 16
+  max_epochs: 30                          # as da82a90e, the best phase-1 config
+  warmup_epochs: 2
+  grad_clip: 1.0
+  patience: 30
+  monitor: val_macro_auroc
+
+seed: 0
+device: auto
+output_dir: outputs/experiments

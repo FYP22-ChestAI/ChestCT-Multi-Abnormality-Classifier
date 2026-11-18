@@ -118,9 +118,12 @@ def train_defaults(ctx: dict) -> dict[str, Default]:
 
 
 def trained_run_defaults(ctx: dict) -> dict[str, Default]:
-    """evaluate / explain: the source and run the experiment was trained on (its saved config.yaml)."""
+    """evaluate / explain / clinical report: the source and run the experiment was trained on (its saved
+    config.yaml; for a config folder, its first seed's)."""
     folder = ctx.get("experiment_dir")
     cfg_file = Path(folder) / "config.yaml" if folder else None
+    if cfg_file and not cfg_file.is_file():
+        cfg_file = next(iter(sorted(Path(folder).glob("seed*/config.yaml"))), None)
     if not cfg_file or not cfg_file.is_file():
         return {}
     data = (yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}).get("data", {})

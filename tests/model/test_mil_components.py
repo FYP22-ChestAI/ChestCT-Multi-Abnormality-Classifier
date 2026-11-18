@@ -54,7 +54,8 @@ def test_per_label_branches_attend_independently():
 
 
 def test_gradients_reach_every_parameter():
-    m = GatedABMIL(6, 3, hidden_dim=8, attn_dim=4).train()
+    torch.manual_seed(0)  # tiny random layers + dropout: unseeded, a dead unit could zero a gradient by chance
+    m = GatedABMIL(6, 3, hidden_dim=8, attn_dim=4, dropout=0.0).train()
     m(torch.randn(2, 5, 6), torch.ones(2, 5, dtype=torch.bool)).pooled.sum().backward()
     assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in m.parameters())
 
