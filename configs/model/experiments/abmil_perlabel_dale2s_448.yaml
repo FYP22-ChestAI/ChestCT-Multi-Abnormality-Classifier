@@ -1,0 +1,52 @@
+# Step 4 encoder ablation: the best phase-1 config (da82a90e: per-label ABMIL, BCE, 30 epochs, sharp only) with ONE
+# change, the encoder: dale_ct_2s_448 (slices upsampled to 448 x 448 before the backbone). Compare its clinical report and val / test
+# AUROC with da82a90e: any difference is the encoder's.
+#
+#   python scripts/model/train_mil.py --experiment abmil_perlabel_dale2s_448 [--seed 1]
+
+name: abmil_perlabel_dale2s_448
+data_config: configs/preprocessing.yaml   # cache_dir, runs_dir
+encode_config: configs/model/encode.yaml  # embeddings_dir
+encoder: dale_ct_2s_448                    # the ablation store (configs/model/encoders/dale_ct_2s_448.yaml)
+
+data:
+  source: ctrate
+  run: train-sharp-5800
+  train_kernel_classes: [sharp]           # train AND val; test is evaluated on every kernel by evaluate_mil.py
+  labels: null                            # null = every label_* column of the manifest (18 for CT-RATE)
+  qc_passed_only: true
+  train_slice_sampler: {mode: all}        # bag augmentation: all | stride | uniform_k | random_k (ct_model.data.slices)
+  preload: true                           # bags in RAM: ~3.3 GB for train + val
+
+features:
+  standardize: true                       # per-dimension mean / std, fitted on TRAIN slices only
+
+aggregator:
+  type: abmil                             # gated attention MIL (Ilse et al. 2018, Eq. 9)
+  hidden_dim: 256                         # projection D=1024 -> 256 (Linear, ReLU, Dropout)
+  attn_dim: 128                           # attention size (L in the paper)
+  dropout: 0.25
+  branches: per_label                     # one attention over slices per label (vs single in abmil_dale2s)
+
+head:
+  type: linear
+  dropout: 0.0
+head_prior_bias: true                     # bias = log(p / (1 - p)), p = train prevalence per label
+
+loss:
+  type: bce                               # bce | weighted_bce (pos_weight from train) | asl (asymmetric loss)
+
+optim:
+  optimizer: adamw
+  lr: 2.0e-4
+  weight_decay: 1.0e-2                    # weight matrices only
+  batch_size: 16                          # volumes per step: ceil(5827 / 16) = 365 steps per epoch
+  max_epochs: 30                          # as da82a90e, the best phase-1 config
+  warmup_epochs: 2                        # linear warm-up, then cosine to 0 at max_epochs
+  grad_clip: 1.0
+  patience: 30
+  monitor: val_macro_auroc
+
+seed: 0
+device: auto
+output_dir: outputs/experiments

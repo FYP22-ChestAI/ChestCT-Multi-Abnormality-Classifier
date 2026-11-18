@@ -3,7 +3,7 @@
     data/embeddings/<encoder name>-<fingerprint8>/
         .embedding_record.json     what made these embeddings (encoder config + fingerprint, weights commit,
                                    HU-cache fingerprint, dim, dtype)
-        {volume_id}.npy            (n_slices, embed_dim), float16 by default; row i = cache slice i (head -> foot)
+        {volume_id}.npy            (n_slices, embed_dim), float16 by default; row i = cache slice i (foot -> head)
         index.csv                  volume_id, n_slices, embed_dim (rewritten after every encode run)
 
 The HU cache (data/cache) stays the source of truth. This folder can be deleted and rebuilt at any

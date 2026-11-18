@@ -17,6 +17,7 @@ PHASES = [
     "1 · Preprocessing",
     "2 · Encode slices (stage 2)",
     "3 · Train & evaluate (stages 3–4)",
+    "4 · Adapt the encoder (phase 2)",
 ]
 
 
@@ -34,7 +35,7 @@ class ScriptSpec:
     choices: dict[str, Callable[[dict], list[str]]] = field(default_factory=dict)
 
 
-_PRE, _ENC, _TRAIN = PHASES
+_PRE, _ENC, _TRAIN, _ADAPT = PHASES
 
 SCRIPTS: list[ScriptSpec] = [
     # ---------------------------------------------------------------- 1 · preprocessing
@@ -87,16 +88,32 @@ SCRIPTS: list[ScriptSpec] = [
                icon=":material/rule:", essential=("experiment_dir", "split"),
                defaults=d.trained_run_defaults,
                choices={"experiment_dir": c.experiment_dirs, "run": c.runs, "kernel_classes": c.kernel_classes}),
+    ScriptSpec("clinical-report", _TRAIN, "Clinical report", "scripts/model/clinical_report.py",
+               "Is it clinically usable? False labels and missed findings per scan, sharp-vs-soft decision "
+               "changes, calibration, per-label gate. A config folder scores the seed ensemble.",
+               icon=":material/medical_services:", essential=("experiment_dir", "split", "per_seed"),
+               defaults=d.trained_run_defaults,
+               choices={"experiment_dir": c.report_dirs, "run": c.runs}),
     ScriptSpec("summarize-experiments", _TRAIN, "Summarize experiments",
                "scripts/model/summarize_experiments.py",
                "Group results by configuration and average over seeds (writes summary_<split>.csv).",
                icon=":material/summarize:", essential=("split", "name")),
+    ScriptSpec("export-mlflow", _TRAIN, "Export to MLflow / DagsHub", "scripts/model/export_mlflow.py",
+               "Push finished runs, ensembles, clinical reports and weights to the MLflow server in "
+               "$MLFLOW_TRACKING_URI. Idempotent: only what the server lacks is sent.",
+               icon=":material/cloud_upload:", optional=True, essential=("dry_run", "name", "refresh")),
     ScriptSpec("explain-volume", _TRAIN, "Explain a volume", "scripts/model/explain_volume.py",
                "Optional evidence for one volume: slice contributions and Grad-CAM heatmaps.",
                icon=":material/visibility:", optional=True, essential=("experiment_dir", "volume_id", "labels"),
                defaults=d.trained_run_defaults,
                choices={"experiment_dir": c.experiment_dirs, "volume_id": c.volume_ids, "labels": c.labels,
                         "run": c.runs}),
+    # ---------------------------------------------------------------- 4 · adapt the encoder
+    ScriptSpec("adapt-encoder", _ADAPT, "Adapt the encoder (LoRA)", "scripts/model/adapt_encoder.py",
+               "Phase 2: LoRA in the encoder, end to end from the HU cache, with sharp / soft consistency. "
+               "Hours on the GPU; resumable. Then encode its store and train / evaluate on it as usual.",
+               icon=":material/tune:", essential=("adapt_config", "init_from", "seed"),
+               choices={"adapt_config": c.adapt_configs, "init_from": c.experiment_dirs, "run": c.runs}),
 ]
 
 

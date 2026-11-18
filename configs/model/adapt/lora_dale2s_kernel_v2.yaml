@@ -1,0 +1,58 @@
+# Second LoRA run (v2) of lora_dale2s_kernel.yaml -- identical except two settings, both chosen from v1's results
+# (outputs/adapters/lora_dale2s_kernel/f2ff5477/seed0: test AUROC 0.826, but 33 % of paired sharp / soft scans still
+# change at least one decision, against a gate target of <= 24 %):
+#   * consistency.prediction_weight 0.5 -> 1.0  -- push the two kernels' predictions together harder
+#   * optim.epochs 6 -> 10                      -- v1's val macro AUROC was still rising at its last epoch
+#
+#   python scripts/model/adapt_encoder.py --adapt-config lora_dale2s_kernel_v2 --init-from <phase-1 run>
+
+name: lora_dale2s_kernel_v2
+encoder: dale_ct_2s                       # the base encoder (configs/model/encoders/dale_ct_2s.yaml)
+init_from: null                           # a phase-1 run folder (FeatureNorm + aggregator + head); pass --init-from
+data_config: configs/preprocessing.yaml
+encode_config: configs/model/encode.yaml
+
+data:
+  source: ctrate
+  run: train-sharp-5800+train-soft-1000   # ~1000 train scans have both kernels (pairs); val holds both too
+  kernel_classes: null                    # sharp and soft
+  labels: null                            # the labels of init_from
+  qc_passed_only: true
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [qkv, proj]             # attention input / output projections
+  last_n_blocks: 12                       # blocks 12-23 adapt; 0-11 run without gradients (memory, speed)
+
+slices:
+  train_k: 48                             # random_k: one slice per equal segment, head to foot
+  val_k: 48                               # uniform_k
+  max_offset: 2                           # z alignment search between two reconstructions of a scan
+
+consistency:
+  pairs: true
+  embedding_weight: 1.0                   # 1 - cos(aligned slices of the two views), after FeatureNorm
+  prediction_weight: 1.0                  # v2: 0.5 -> 1.0 (decisions still changed between kernels in v1)
+  augment_prob: 0.25
+  blur_sigma: [0.5, 1.2]                  # pixels (0.75 mm cache spacing before the 224 resize)
+  sharpen_amount: [0.5, 1.5]
+
+optim:
+  lr_lora: 1.0e-4
+  lr_head: 2.0e-5
+  weight_decay: 1.0e-2
+  scans_per_step: 2                       # per forward / backward pass (1-2 volumes each)
+  accumulation: 8                         # -> ~16 scans per optimiser step
+  epochs: 10                              # v2: 6 -> 10 (val AUROC was still rising at epoch 6 in v1)
+  warmup_steps: 100
+  grad_clip: 1.0
+  scans_per_epoch: null                   # all ~5800 train scans
+  monitor: val_macro_auroc
+  checkpoint: true
+
+seed: 0
+device: auto
+amp_dtype: bfloat16
+output_dir: outputs/adapters

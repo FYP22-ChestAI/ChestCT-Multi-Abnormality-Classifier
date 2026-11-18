@@ -4,6 +4,9 @@ Opening checks, before anything trains:
   * the embedding store exists and still matches the HU cache (open_store(create=False));
   * the requested labels are columns of the manifest;
   * every selected volume has embeddings (EmbeddingBagDataset lists any that do not).
+
+``data.run`` may join several runs with ``+`` (``train-sharp-5800+train-soft-1000``, see
+ct_model.data.volumes.load_run_manifest); the config hash then covers every part's manifest.
 """
 from __future__ import annotations
 
@@ -18,15 +21,14 @@ from ct_preprocessing.runs import Run
 from ..config import load_encoder_config, load_stage2_config
 from ..data.datasets import EmbeddingBagDataset
 from ..data.slices import SliceSampler
-from ..data.volumes import VolumeRecord, label_names, load_run_manifest, select_volumes
+from ..data.volumes import CombinedRun, VolumeRecord, label_names, load_run_manifest, manifest_sha256, select_volumes
 from ..embeddings.store import EmbeddingStore, open_store
 from .config import ExperimentConfig
-from .records import file_sha256
 
 
 @dataclass
 class ExperimentData:
-    run: Run
+    run: Run | CombinedRun
     manifest: pd.DataFrame
     manifest_sha256: str
     cache_dir: str
@@ -65,7 +67,7 @@ def open_data(cfg: ExperimentConfig, *, source: str | None = None, run: str | No
     if not wanted:
         raise ValueError(f"{resolved.manifest_path} has no label_* columns -- merge the labels first")
     return ExperimentData(
-        run=resolved, manifest=manifest, manifest_sha256=file_sha256(resolved.manifest_path),
+        run=resolved, manifest=manifest, manifest_sha256=manifest_sha256(resolved),
         cache_dir=data_cfg.paths.cache_dir, store=store, label_names=wanted,
         label_index=[available.index(name) for name in wanted], qc_passed_only=cfg.data.qc_passed_only,
     )

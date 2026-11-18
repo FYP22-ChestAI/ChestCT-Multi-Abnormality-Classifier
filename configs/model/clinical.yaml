@@ -1,0 +1,32 @@
+# Clinical evaluation defaults -- see docs/model/README.md ("Clinical evaluation") and
+# src/ct_model/clinical/. Used by scripts/model/clinical_report.py and, automatically, at the end of
+# scripts/model/evaluate_mil.py.
+#
+# The clinical report reads only saved predictions (predictions_val.csv + eval/<...>/predictions.csv),
+# so the same yardstick applies to every phase: frozen MIL, LoRA, slice selection, another dataset.
+# Operating points and calibration are always chosen on VAL and applied unchanged to the scored split.
+
+operating_points:
+  report_specificity: 0.95     # "present": the lowest threshold whose VAL specificity reaches this
+  ruleout_sensitivity: 0.90    # "absent": below the highest threshold whose VAL sensitivity reaches this
+                               # (in between = "uncertain": a human looks)
+  calibration: platt           # none | temperature | platt -- fitted per label on VAL, on logit(p)
+  calibration_by_kernel: false # also per kernel class, where VAL has at least min_calibration_volumes of it
+  min_calibration_volumes: 100
+
+fixed_specificities: [0.90, 0.95]          # sensitivity at these specificities (thresholds from VAL)
+net_benefit_thresholds: [0.05, 0.10, 0.20] # decision-curve threshold probabilities
+calibration_bins: 10                       # equal-width bins for the expected calibration error (ECE)
+bootstrap: 1000                            # patient-level resamples for per-label AUROC CIs (0 = none)
+ci_groups: [all, kernel_class]             # which groupings get CIs (all, kernel_class, manufacturer)
+min_group: 100                             # smaller groups are still reported, flagged too_small, no CI
+
+# A label is "supported" when it passes every rule. Failing a DISCRIMINATION rule (auroc_ci_low,
+# report_sensitivity) makes it "not_supported"; failing only calibration / robustness rules makes it
+# "review". A rule that cannot be computed (e.g. no paired scans) is reported as n/a and does not fail.
+gate:
+  auroc_ci_low: 0.80             # lower end of the 95 % CI of AUROC
+  report_sensitivity: 0.60       # sensitivity at the report threshold
+  ece: 0.05                      # expected calibration error of the calibrated probabilities
+  paired_flip_rate: 0.10         # share of paired sharp / soft scans whose decision differs
+  kernel_sensitivity_gap: 0.10   # |soft - sharp| sensitivity at the report threshold

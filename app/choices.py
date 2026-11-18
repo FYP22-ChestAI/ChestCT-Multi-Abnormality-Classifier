@@ -26,6 +26,11 @@ def experiments(ctx: dict) -> list[str]:
     return _stems(DEFAULT_EXPERIMENTS_DIR)
 
 
+def adapt_configs(ctx: dict) -> list[str]:
+    from ct_model.adapt.config import DEFAULT_ADAPT_DIR
+    return _stems(DEFAULT_ADAPT_DIR)
+
+
 def encoders(ctx: dict) -> list[str]:
     return _stems(DEFAULT_ENCODERS_DIR)
 
@@ -60,6 +65,13 @@ def experiment_dirs(ctx: dict) -> list[str]:
     if "finished" in frame:
         frame = frame.sort_values("finished", ascending=False)
     return [d for d in frame["dir"].dropna().astype(str) if Path(d).is_dir()]
+
+
+def report_dirs(ctx: dict) -> list[str]:
+    """Clinical report targets: config folders (seed ensemble) first, then single runs, newest first."""
+    runs = experiment_dirs(ctx)
+    configs = list(dict.fromkeys(Path(d).parent.as_posix() for d in runs))
+    return configs + runs
 
 
 def volume_ids(ctx: dict) -> list[str]:

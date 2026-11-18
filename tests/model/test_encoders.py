@@ -81,8 +81,14 @@ def test_input_must_fit_patch_size_channels_and_embed_dim():
 
 
 def test_lora_is_not_silently_ignored():
-    with pytest.raises(NotImplementedError, match="LoRA"):
-        build_encoder(_tiny(lora={"r": 8}))
+    """A ``lora`` section really wraps the encoder (ct_model.encoders.lora) and changes the store fingerprint."""
+    from ct_model.encoders.lora import LoRALinear
+
+    enc = build_encoder(_tiny(lora={"r": 8}))
+    assert any(isinstance(m, LoRALinear) for m in enc.modules())
+    assert _tiny(lora={"r": 8}).store_name != _tiny().store_name
+    with pytest.raises(TypeError):
+        build_encoder(_tiny(lora={"rank": 8}))  # a typo fails loudly
 
 
 def test_checkpoint_loading_is_strict(tmp_path):

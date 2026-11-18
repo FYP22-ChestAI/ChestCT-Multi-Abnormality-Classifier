@@ -7,6 +7,8 @@
     res.val_labels    val_per_label.csv of every run (its ``label`` column is renamed ``finding``)
     res.test          metrics_summary.csv of every evaluation (one row per run, eval and group)
     res.test_labels   metrics_per_label.csv of every evaluation
+    res.clinical      scorecard.json headline of every clinical report (one row per run or ensemble and eval)
+    res.clinical_labels  per_label.csv of every clinical report, with the gate status of each label
 
 Everything is found by walking the run folders (``<name>/<hash8>/seed<k>/``), not by reading the
 ledgers, so it works from any folder that holds runs -- the whole output dir, one experiment name,
@@ -18,7 +20,7 @@ without opening their config.yaml files.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +43,8 @@ class Results:
     test: pd.DataFrame
     test_labels: pd.DataFrame
     settings: pd.DataFrame  # one row per config hash, one column per setting that differs between configs
+    clinical: pd.DataFrame = field(default_factory=pd.DataFrame)
+    clinical_labels: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def flatten(d: dict, prefix: str = "") -> dict:
@@ -141,8 +145,38 @@ def load_results(root: str | Path = "outputs/experiments") -> Results:
         frame = pd.concat(frames, ignore_index=True)
         return frame.merge(runs[["run_id", "name", "hash8", "config", "setup", "seed"]], on="run_id", how="left")
 
+    clinical, clinical_labels = load_clinical(root)
+    if not clinical.empty:
+        meta = runs.drop_duplicates("config_hash").set_index("config_hash")[["setup"]]
+        clinical = clinical.join(meta, on="config_hash")
+        clinical_labels = clinical_labels.join(meta, on="config_hash")
     return Results(runs=runs, curves=cat(curves), val_labels=cat(val_labels), test=cat(test),
-                   test_labels=cat(test_labels), settings=settings)
+                   test_labels=cat(test_labels), settings=settings, clinical=clinical, clinical_labels=clinical_labels)
+
+
+def load_clinical(root: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Every clinical report under ``root`` (a run's ``clinical/<eval>/``, a config folder's
+    ``ensemble/clinical/<eval>/``): (one headline row per report, one row per report x group x label)."""
+    rows, labels = [], []
+    for card_path in sorted(Path(root).rglob("clinical/*/scorecard.json")):
+        card = read_json(card_path)
+        if not card:
+            continue
+        ids = {"run_id": card.get("run_id"), "name": card.get("name"), "config_hash": card.get("config_hash"),
+               "hash8": (card.get("config_hash") or "")[:8], "seed": card.get("seed"),
+               "ensemble": card.get("seed") == "ensemble", "members": card.get("members"), "eval": card.get("eval"),
+               "eval_split": (card.get("eval") or "").rsplit("__", 1)[-1], "reported": card.get("reported"),
+               "clinical_config": card.get("clinical_config_fingerprint")}
+        rows.append({**ids, **card.get("headline", {}), "dir": card_path.parent.as_posix()})
+        table = _read_csv(card_path.parent / "per_label.csv")
+        gate = _read_csv(card_path.parent / "gate.csv")
+        if table is not None:
+            if gate is not None:
+                table = table.merge(gate[["finding", "status"]], on="finding", how="left")
+            for key, value in reversed(list(ids.items())):
+                table.insert(0, key, value)
+            labels.append(table)
+    return pd.DataFrame(rows), (pd.concat(labels, ignore_index=True) if labels else pd.DataFrame())
 
 
 def mean_std(frame: pd.DataFrame, keys: list[str], metrics: list[str]) -> pd.DataFrame:

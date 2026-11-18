@@ -86,7 +86,7 @@ a new script part of the one-click pipeline, also add a `Stage` to `app/pipeline
 
 ```
 configs/preprocessing.yaml        all defaults (paths, sources, ingest, split, preprocess, QC)
-configs/model/                    encode.yaml (stage-2 defaults), encoders/<name>.yaml (one backbone each),
+configs/model/                    encode.yaml (stage-2 defaults), clinical.yaml (clinical evaluation), encoders/<name>.yaml (one backbone each),
                                   experiments/<name>.yaml (stages 3+4: ABMIL, per-label ABMIL, mean-pool baseline)
 docs/preprocessing/               README.md (how to run) and data_contract.md (what comes out)
 docs/model/                       README.md (how to run stage 2) and architecture.md (stages, store format, roadmap)
@@ -116,15 +116,17 @@ src/ct_model/                     the model side (stages 2-4)
   aggregators/ heads/ models/     stage 3 (ABMIL, mean pool; query MIL TODO) and 4 (linear head), composed
   training/                       experiment config, losses, metrics, trainer, evaluation, experiment records
   explain/                        optional evidence: exact slice contributions, in-slice Grad-CAM
+  clinical/                       clinical evaluation of every phase: operating points from val, false labels /
+                                  missed findings per scan, sharp-vs-soft decision changes, calibration, label gate
 scripts/preprocessing/            make_worklist.py, ingest.py, merge_manifests.py, qc_report.py, assign_splits.py,
                                   make_kernel_table.py, kernel_survey.py
 scripts/model/                    encode_volumes.py, check_encoder.py, train_mil.py, evaluate_mil.py,
-                                  summarize_experiments.py, explain_volume.py
+                                  clinical_report.py, summarize_experiments.py, explain_volume.py
 app/                              Streamlit control panel: registry.py (scripts by phase), one generic page per script,
                                   background jobs (outputs/ui_jobs/), results viewer
 tests/preprocessing/, tests/model/, tests/ui/  pytest, synthetic data and fake backends: no download or network needed
 notebooks/                        Colab notebooks for trying the pipeline on a small sample; encoder_embeddings_report,
-                                  experiments_report, evidence_viewer
+                                  experiments_report, clinical_report, evidence_viewer
 ```
 
 ## Setup notes

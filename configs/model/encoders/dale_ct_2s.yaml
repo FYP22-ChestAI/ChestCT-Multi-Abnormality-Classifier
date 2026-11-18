@@ -33,4 +33,4 @@ input:
 
 pooling: cls                              # cls (= model(x), global_pool "token") | mean_patch | cls_mean (concat, 2x dim)
 store_dtype: float16                      # lossless for bfloat16 outputs; float32 doubles the store
-lora: null                                # phase 2 (TODO, ct_model.encoders.lora); must stay null until implemented
+lora: null                                # phase 2: an adapted copy of this file is written by scripts/model/adapt_encoder.py

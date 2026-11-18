@@ -8,7 +8,7 @@ For an aggregator with linear pooling and the linear head (ABMIL, mean pool),
 label c's logit: positive slices push towards "present", negative ones away. No gradients, no
 approximation; ``check_sum`` verifies the identity on every call.
 
-Slice k is slice k of the PREPROCESSED volume (the HU cache / run_inference output): head -> foot at
+Slice k is slice k of the PREPROCESSED volume (the HU cache / run_inference output): foot -> head at
 1.5 mm, body-cropped. The crop box is not stored by preprocessing yet, so mapping back to the original
 DICOM slice number is not possible today (docs/model/architecture.md, TODO).
 

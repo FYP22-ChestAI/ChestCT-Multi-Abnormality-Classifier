@@ -99,6 +99,19 @@ def _evaluations(t: Target, make) -> list[tuple[str, str, dict]]:
     return out
 
 
+def _clinical_reports(t: Target, make) -> list[tuple[str, str, dict]]:
+    """One step per experiment: the seed ensemble of its config folder, plus every seed's own report."""
+    out = []
+    for e in t.experiments:
+        try:
+            folder = S.train_run_dir(make("train-mil", _train_fields(t, e, t.seeds[0] if t.seeds else 0)))
+        except Exception:
+            folder = None
+        where = folder.parent.as_posix() if folder else f"(the {e} config folder, once trained)"
+        out.append((e, f"{e} · seed ensemble", {"experiment_dir": where, "split": t.eval_split, "per_seed": True}))
+    return out
+
+
 _RUN = _one(lambda t: {"source": t.source, "run": t.run})
 _DATA = "Data preparation"
 
@@ -113,6 +126,8 @@ STAGES: list[Stage] = [
     Stage("train", "Train", "train-mil", S.train, _trainings, shared=False, long=True),
     Stage("evaluate", "Evaluate", "evaluate-mil", S.evaluate, _evaluations, shared=False,
           always_args={"overwrite": True}),
+    Stage("clinical", "Clinical report", "clinical-report", S.clinical, _clinical_reports, shared=False,
+          always_args={}),
     Stage("summarize", "Summarize", "summarize-experiments", S.always,
           lambda t, make: [("val", "val results", {"split": "val"}), ("test", "test results", {"split": "test"})],
           shared=False),

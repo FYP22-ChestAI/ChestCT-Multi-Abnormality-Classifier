@@ -17,12 +17,48 @@ stage 4  ct_model.heads        volume vector ─► 18 abnormality logits       
 
 | Phase | Trains | Reads | Status |
 |---|---|---|---|
-| **1** | stage 3 (ABMIL) + stage 4, encoder **frozen** | the embedding store (precomputed once) | **built**; to run on the server (`train-sharp-5800`) |
-| **2** | LoRA adapters in the encoder (+ head) | the HU cache, end to end, k slices per volume | TODO (`encoders/lora.py`) |
-| **3** | other aggregators: query-based MIL / QGMIL | the embedding store (or phase-2 encoder) | TODO (`aggregators/query_mil.py`) |
+| **1** | stage 3 (ABMIL) + stage 4, encoder **frozen** | the embedding store (precomputed once) | **done** (`train-sharp-5800`): best test macro AUROC 0.793 (0.797 as a 5-seed ensemble) |
+| **1b** | the same, on sharp **+ soft** (`train-sharp-5800+train-soft-1000`) | the embedding store | in progress: does soft data alone close the kernel gap? |
+| **2** | LoRA adapters in the encoder (+ head), with sharp/soft consistency | the HU cache, end to end, k slices per volume | TODO (`encoders/lora.py`) |
+| **then** | content-aware slice selection | the final encoder | after the gate below |
+| **3** | other aggregators: query-based MIL / QGMIL | the embedding store (or phase-2 encoder) | TODO (`aggregators/query_mil.py`); low priority while all aggregators score within 1 point |
+
+**Every phase is judged by the clinical report** (README, "Clinical evaluation") and the encoder diagnostics,
+not by AUROC alone. Phase-1 results:
+- **The encoder limits results.** A linear probe on the mean embedding reaches 0.769, and every aggregator
+  lands within 1 point of the others.
+- **The kernel dominates the embedding.** The kernel probe is 0.9999.
+- **Decisions depend on the kernel.** At the max-F1 thresholds:
+  - 80 % of scans get a different decision on their sharp and soft reconstructions;
+  - false labels run at 2.0 per scan;
+  - 50 % of normal scans are flagged.
+
+**Gate before slice selection.** One config must pass all of these, against the phase-1 baseline (`da82a90e`
+ensemble; section 8 of `clinical_report.ipynb`):
+- paired sharp/soft scans with a changed decision at most **half** the baseline's;
+- soft − sharp sensitivity within **0.05**;
+- no more false labels per scan;
+- more labels supported.
+
+Selection is then scored against that encoder's full-depth report. Its proxy metrics are computed on
+embeddings, so the encoder must not change afterwards.
 
 Phase 2 targets the domain gaps: sharp vs soft kernels (soft volumes from a cache subset run) and the
 local NHRD scanners. Every TODO module has a docstring with its intended design, inputs and outputs.
+
+**How a volume loss trains the encoder (phase 2).** No slice labels are needed:
+- The chain slices → encoder → attention-weighted pooling → head → loss is differentiable. Each slice that
+  went through the encoder gets its own gradient, weighted by its attention, so the slices the model attends
+  to are corrected most.
+- **Memory:** ViT-L cannot hold gradients for about 230 slices on 16 GB. Use k = 48 sampled slices per volume
+  (`SliceSampler("random_k")`) with gradients; at test time every slice goes through without gradients.
+- **Missed lesions:** a sampled bag can miss a small lesion. Mix in the slices the phase-1 attention ranks
+  highest; this is also the hook for slice selection.
+- **Label-free slice-level losses:**
+  - the same slice of a scan's sharp and soft reconstructions should give the same embedding (about 97.5 % of
+    test pairs align within 2 slices);
+  - the two volumes' predictions should agree;
+  - for sharp-only scans, a slice should match its blurred or sharpened copy.
 
 | TODO | Where | Notes |
 |---|---|---|
@@ -103,7 +139,7 @@ ablation with a new store.
 ```
 data/embeddings/<encoder name>-<fingerprint8>/      e.g. dale_ct_2s-4f144ab5/
   .embedding_record.json    encoder config + fingerprint, weights commit, HU-cache fingerprint, dim, dtype, versions
-  {volume_id}.npy           (n_slices, D) float16; row i = cache slice i (head -> foot)
+  {volume_id}.npy           (n_slices, D) float16; row i = cache slice i (foot -> head)
   index.csv                 volume_id, n_slices, embed_dim
   failed_<source>_<run>.csv only if some volumes failed, with the reason
 ```
@@ -313,5 +349,5 @@ Guards and checks:
   DALE's maps pass the diagnostics is to be checked on the server; it is not established here.
 
 **Limits.** Evidence shows what the *model* relied on; it is not a validated localisation of a finding.
-Slice numbers refer to the **preprocessed** volume (1.5 mm, head to foot, body-cropped). The crop box is
+Slice numbers refer to the **preprocessed** volume (1.5 mm, foot to head, body-cropped). The crop box is
 not stored yet, so they cannot be mapped back to original DICOM slice numbers.

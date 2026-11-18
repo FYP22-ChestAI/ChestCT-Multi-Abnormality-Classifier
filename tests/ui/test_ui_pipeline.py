@@ -1,6 +1,7 @@
 """The control panel's one-click pipeline: status checks read saved outputs, the plan fans out and honours
 modes, and the runner skips finished steps and stops at the first failure."""
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -126,3 +127,46 @@ def test_the_runner_skips_done_steps_and_stops_at_the_first_failure(monkeypatch,
     assert progress["result"] == "failed" and len(calls) == 2
     assert states == {"prep": "skipped", "train:a:0": "done", "train:a:1": "failed", "train:a:2": "pending",
                       "eval": "pending"}
+
+
+def test_clinical_report_check_follows_the_evaluated_seeds(tmp_path):
+    """BLOCKED until a seed is evaluated; TODO until the ensemble report covers exactly the evaluated seeds
+    (and every seed's own report exists); DONE after; TODO again when another seed gets evaluated."""
+    import numpy as np
+    from ct_model.clinical import clinical_report
+
+    names = ["a", "b"]
+    rng = np.random.default_rng(0)
+    config_dir = tmp_path / "exp" / "aaaa1111"
+
+    def seed(k, evaluated=True):
+        folder = config_dir / f"seed{k}"
+        folder.mkdir(parents=True)
+        (folder / "labels.json").write_text(json.dumps(names))
+        (folder / "config.yaml").write_text(yaml.safe_dump({"name": "exp", "seed": k, "output_dir": str(tmp_path),
+                                                            "data": {"source": "ctrate", "run": "r1"}}))
+        (folder / "run_info.json").write_text(json.dumps({"run_id": f"exp/aaaa1111/seed{k}", "status": "finished",
+                                                          "config_hash": "aaaa1111bbbb2222"}))
+        for split, where in (("val", folder / "predictions_val.csv"),
+                             ("test", folder / "eval" / "ctrate__r1__test" / "predictions.csv")):
+            if split == "test" and not evaluated:
+                continue
+            where.parent.mkdir(parents=True, exist_ok=True)
+            y = (rng.random((60, 2)) < 0.4).astype(float)
+            frame = pd.DataFrame({"volume_id": [f"v{i}" for i in range(60)], "patient_id": [f"v{i}" for i in range(60)],
+                                  "kernel_class": "sharp"})
+            for c, n in enumerate(names):
+                frame[f"prob_{n}"], frame[f"true_{n}"] = np.clip(0.5 * y[:, c] + rng.random(60) * 0.6, 0, 1), y[:, c]
+            frame.to_csv(where, index=False)
+
+    argv = ["--experiment-dir", str(config_dir), "--split", "test", "--per-seed"]
+    seed(0, evaluated=False)
+    assert status.clinical(argv).state == status.BLOCKED
+    shutil.rmtree(config_dir / "seed0")
+    seed(0)
+    assert status.clinical(argv).state == status.TODO
+    clinical_report(config_dir, per_seed=True, log=lambda m: None)  # the settings the check compares with
+    assert status.clinical(argv).state == status.DONE
+    seed(1)
+    assert status.clinical(argv).state == status.TODO
+    assert any(s.key == "clinical" for s in pipeline.STAGES)

@@ -6,11 +6,11 @@ through the encoder and a 16 GB GPU cannot hold ViT-L activations for ~230 slice
 
     all        every slice
     stride     every ``stride``-th slice (1.5 mm cache spacing -> stride 2 = 3 mm)
-    uniform_k  ``k`` slices evenly spread head to foot (deterministic: validation / test)
+    uniform_k  ``k`` slices evenly spread along the body axis (deterministic: validation / test)
     random_k   ``k`` slices, one drawn at random from each of ``k`` equal segments (training: keeps
-               head-to-foot coverage while varying the slices every epoch)
+               full body-axis coverage while varying the slices every epoch)
 
-Indices are always returned sorted, so slice order (head -> foot) is preserved.
+Indices are always returned sorted, so slice order (foot -> head, as in the cache) is preserved.
 """
 from __future__ import annotations
 
